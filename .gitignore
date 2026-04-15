@@ -1,5 +1,29 @@
-node_modules/
-.env
-uploads/
+# Server configuration
+.htaccess
+
+# Log files
 *.log
+email_log.txt
+
+# Environment and credentials
+.env
+*.env
+credentials.*
+config.local.php
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Uploads (user content)
+uploads/*
+!uploads/.gitkeep
+
+# IDE and OS files
 .DS_Store
+.idea/
+*.swp
+.vscode/
