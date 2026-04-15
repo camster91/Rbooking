@@ -11,6 +11,23 @@ const validator = require('validator');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Basic Auth — protects all pages
+const AUTH_USER = process.env.AUTH_USER || 'admin';
+const AUTH_PASS = process.env.AUTH_PASS || 'rotman2025';
+
+function basicAuth(req, res, next) {
+    const hdr = req.headers.authorization || '';
+    if (hdr.startsWith('Basic ')) {
+        const decoded = Buffer.from(hdr.slice(6), 'base64').toString();
+        const [user, pass] = decoded.split(':');
+        if (user === AUTH_USER && pass === AUTH_PASS) return next();
+    }
+    res.set('WWW-Authenticate', 'Basic realm="Rotman AV"');
+    return res.status(401).send('Authentication required');
+}
+
+app.use(basicAuth);
+
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
