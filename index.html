@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Booking - Rotman AV</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --rotman-blue: #00355f;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --success: #10b981;
+            --danger: #ef4444;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+        
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: radial-gradient(circle at top left, #1e293b, #0f172a); color: var(--text); padding: 20px; min-height: 100vh; }
+        
+        .booking-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            max-width: 900px;
+            margin: 0 auto;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--rotman-blue) 0%, #001f3f 100%);
+            padding: 30px 40px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .header-icon { width: 50px; height: 50px; background: rgba(255,255,255,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+        .header h1 { margin: 0; font-size: 1.5rem; font-weight: 800; }
+        .header p { margin: 5px 0 0; opacity: 0.8; font-size: 0.9rem; }
+
+        .progress-container { background: rgba(0,0,0,0.2); padding: 20px 40px; border-bottom: 1px solid var(--border); }
+        .step-indicators { display: flex; justify-content: space-between; position: relative; }
+        .step-indicators::before { content: ''; position: absolute; top: 15px; left: 20px; right: 20px; height: 2px; background: var(--border); z-index: 1; }
+        
+        .step-node { width: 32px; height: 32px; border-radius: 50%; background: var(--bg); border: 2px solid var(--border); z-index: 3; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; transition: all 0.3s; position: relative; }
+        .step-node.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 15px rgba(37, 99, 235, 0.4); }
+        .step-node.completed { background: var(--accent); border-color: var(--accent); color: white; }
+        .step-node.completed::after { content: '✓'; }
+
+        .progress-fill { position: absolute; top: 15px; left: 20px; height: 2px; background: var(--accent); z-index: 2; transition: width 0.3s ease; }
+
+        .form-content { padding: 40px; }
+        .form-step { display: none; }
+        .form-step.active { display: block; animation: fadeIn 0.4s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); } 20%, 40%, 60%, 80% { transform: translateX(5px); } }
+        .shake { animation: shake 0.5s ease; }
+
+        .field-group { margin-bottom: 25px; }
+        label { display: block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
+        
+        input, select, textarea {
+            width: 100%;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: white;
+            transition: all 0.2s;
+            font-size: 1rem;
+        }
+        input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; background: rgba(255,255,255,0.08); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
+        input.is-invalid, select.is-invalid, textarea.is-invalid { border-color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+        
+        .space-grid, .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        
+        .choice-card {
+            background: rgba(255,255,255,0.03);
+            border: 2px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .choice-card:hover { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.05); }
+        .choice-card.selected { border-color: var(--accent); background: rgba(37, 99, 235, 0.15); }
+        .choice-card i { color: var(--accent); margin-bottom: 10px; }
+        .choice-card .card-title { font-weight: 700; margin-top: 5px; }
+        .choice-card .card-desc { font-size: 0.8rem; color: var(--muted); margin-top: 5px; }
+        
+        input[type="radio"] { position: absolute; opacity: 0; width: 0; height: 0; }
+        
+        .preset-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .btn-preset { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--muted); padding: 8px 16px; border-radius: 20px; font-size: 0.85rem; white-space: nowrap; cursor: pointer; transition: all 0.2s; }
+        .btn-preset:hover { background: rgba(255,255,255,0.1); color: white; }
+        .btn-preset.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+        .info-alert { background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px; padding: 15px 20px; margin-bottom: 20px; display: flex; gap: 12px; align-items: flex-start; }
+        .info-alert i { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+        .info-alert strong { display: block; margin-bottom: 5px; }
+
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: 16px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: rgba(255,255,255,0.02);
+        }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); }
+        .upload-zone i { color: var(--muted); margin-bottom: 10px; }
+        .upload-zone p { margin: 5px 0 0; font-size: 0.9rem; color: var(--muted); }
+        .upload-zone small { color: var(--muted); opacity: 0.7; }
+
+        .upload-preview { display: none; align-items: center; gap: 15px; background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px; padding: 15px 20px; }
+        .upload-preview .file-info { flex: 1; }
+        .upload-preview .file-name { font-weight: 600; }
+        .upload-preview .file-size { font-size: 0.85rem; color: var(--muted); }
+
+        .footer-nav { display: flex; justify-content: space-between; padding: 20px 40px; background: rgba(0,0,0,0.1); border-top: 1px solid var(--border); }
+        .btn-nav { padding: 12px 30px; border-radius: 12px; font-weight: 700; border: none; transition: all 0.2s; cursor: pointer; font-size: 1rem; }
+        .btn-back { background: transparent; color: var(--muted); }
+        .btn-back:hover { background: rgba(255,255,255,0.05); color: white; }
+        .btn-next { background: var(--accent); color: white; box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2); }
+        .btn-next:hover { background: var(--accent-hover); }
+        .btn-submit { background: var(--success); color: white; box-shadow: 0 10px 20px rgba(16, 185, 129, 0.2); }
+        .btn-submit:hover { background: #059669; }
+        .btn-nav:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Review step styles */
+        .review-section { background: rgba(255,255,255,0.03); border-radius: 16px; padding: 25px; border: 1px solid var(--border); }
+        .review-section h3 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 15px; }
+        .review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .review-item label { font-size: 0.75rem; color: var(--muted); margin-bottom: 3px; }
+        .review-item div { font-weight: 600; }
+        .review-item.full-width { grid-column: 1 / -1; }
+
+        /* Success Modal */
+        .modal-content { background: var(--card-bg); border: 1px solid var(--border); border-radius: 20px; }
+        .modal-header { border-bottom: 1px solid var(--border); padding: 20px 25px; }
+        .modal-body { padding: 30px 25px; text-align: center; }
+        .modal-body i { color: var(--success); margin-bottom: 20px; }
+        .modal-footer { border-top: 1px solid var(--border); padding: 20px 25px; justify-content: center; }
+        .btn-modal { background: var(--accent); color: white; border: none; padding: 12px 30px; border-radius: 10px; font-weight: 600; }
+
+        @media (max-width: 768px) {
+            .header, .form-content, .footer-nav, .progress-container { padding: 20px; }
+            .review-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="booking-card">
+        <div class="header">
+            <div class="header-icon"><i data-lucide="calendar-plus" style="width: 28px; height: 28px; color: white;"></i></div>
+            <div>
+                <h1>Book an Event</h1>
+                <p>Rotman AV Services</p>
+            </div>
+        </div>
+
+        <div class="progress-container">
+            <div class="step-indicators">
+                <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                <div class="step-node active" data-step="1"><span style="display:none">1</span></div>
+                <div class="step-node" data-step="2"><span style="display:none">2</span></div>
+                <div class="step-node" data-step="3"><span style="display:none">3</span></div>
+                <div class="step-node" data-step="4"><span style="display:none">4</span></div>
+            </div>
+        </div>
+
+        <form id="booking-form" enctype="multipart/form-data">
+            <!-- Step 1: Event Info -->
+            <div class="form-step active" data-step="1">
+                <h2 style="font-weight: 800; margin: 0 0 20px;">Event Information</h2>
+                
+                <div class="field-group">
+                    <label>Event Name *</label>
+                    <input type="text" name="event-name" id="event-name" placeholder="e.g., Dean's Welcome Reception" required>
+                </div>
+
+                <div class="field-group">
+                    <label>Select Space *</label>
+                    <div class="space-grid">
+                        <label class="choice-card">
+                            <input type="radio" name="event-space" value="full" required>
+                            <i data-lucide="maximize"></i>
+                            <div class="card-title">Event Hall Full</div>
+                            <div class="card-desc">Entire venue (350 seats)</div>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="event-space" value="one-third">
+                            <i data-lucide="layout-panel-top"></i>
+                            <div class="card-title">Event Hall 1/3</div>
+                            <div class="card-desc">Front third (~100 seats)</div>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="event-space" value="two-thirds">
+                            <i data-lucide="layout-panel-left"></i>
+                            <div class="card-title">Event Hall 2/3</div>
+                            <div class="card-desc">Front two-thirds (~200 seats)</div>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="event-space" value="fleck-atrium">
+                            <i data-lucide="home"></i>
+                            <div class="card-title">Fleck Atrium</div>
+                            <div class="card-desc">Standing reception style</div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6 field-group">
+                        <label>Event Date *</label>
+                        <input type="text" name="event-date" id="event-date" placeholder="Select date..." required>
+                    </div>
+                    <div class="col-md-6 field-group">
+                        <label>Your Name *</label>
+                        <input type="text" name="person-of-contact" id="person-of-contact" placeholder="Full Name" required>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label>Email Address *</label>
+                    <input type="email" name="email-address" id="email-address" placeholder="your.name@utoronto.ca" required>
+                </div>
+            </div>
+
+            <!-- Step 2: Timing -->
+            <div class="form-step" data-step="2">
+                <h2 style="font-weight: 800; margin: 0 0 10px;">Event Timing</h2>
+                <p style="color: var(--muted); margin-bottom: 25px;">All times should be in sequential order.</p>
+
+                <div class="info-alert">
+                    <i data-lucide="info" style="width: 20px; height: 20px;"></i>
+                    <div>
+                        <strong>Time Presets Available</strong>
+                        Click a preset below to auto-fill recommended times.
+                    </div>
+                </div>
+
+                <div class="preset-row" style="margin-top: 20px;">
+                    <button type="button" class="btn-preset" data-preset="morning">🌅 Morning (8:30-12:00)</button>
+                    <button type="button" class="btn-preset" data-preset="afternoon">☀️ Afternoon (12:30-17:00)</button>
+                    <button type="button" class="btn-preset" data-preset="evening">🌙 Evening (17:30-21:00)</button>
+                    <button type="button" class="btn-preset" data-preset="fullday">📅 Full Day (8:30-17:00)</button>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div class="field-group">
+                        <label>Registration Opens *</label>
+                        <input type="time" name="registration-time" id="registration-time" required>
+                    </div>
+                    <div class="field-group">
+                        <label>Event Start *</label>
+                        <input type="time" name="event-start-time" id="event-start-time" required>
+                    </div>
+                    <div class="field-group">
+                        <label>Presentation End *</label>
+                        <input type="time" name="presentation-end-time" id="presentation-end-time" required>
+                    </div>
+                    <div class="field-group">
+                        <label>Shutdown Complete *</label>
+                        <input type="time" name="shutdown" id="shutdown" required>
+                    </div>
+                </div>
+
+                <div class="info-alert" id="budget-alert" style="display: none;">
+                    <i data-lucide="alert-triangle" style="width: 20px; height: 20px; color: #f59e0b;"></i>
+                    <div>
+                        <strong>Budget Numbers Required</strong>
+                        <span style="color: var(--muted); font-size: 0.9rem;">
+                            Your event is scheduled outside regular hours. Please provide CC or CFC budget numbers in the next step.
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Services & Extras -->
+            <div class="form-step" data-step="3">
+                <h2 style="font-weight: 800; margin: 0 0 20px;">Services & Extras</h2>
+                
+                <div class="field-group">
+                    <label>Recording Option *</label>
+                    <div class="option-grid">
+                        <label class="choice-card">
+                            <input type="radio" name="recording-option" value="none" required>
+                            <i data-lucide="user"></i>
+                            <div class="card-title">Technician Only</div>
+                            <div class="card-desc">1 Technician on site</div>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="recording-option" value="basic-recording">
+                            <i data-lucide="video"></i>
+                            <div class="card-title">Basic Recording</div>
+                            <div class="card-desc">Fixed camera or Zoom</div>
+                        </label>
+                        <label class="choice-card">
+                            <input type="radio" name="recording-option" value="live-web-recording">
+                            <i data-lucide="radio"></i>
+                            <div class="card-title">Live Web Recording</div>
+                            <div class="card-desc">Multi-cam + streaming</div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6 field-group">
+                        <label>CC# (Cost Center)</label>
+                        <input type="text" name="cc-number" id="cc-number" placeholder="e.g., 12345-6789">
+                    </div>
+                    <div class="col-md-6 field-group">
+                        <label>CFC# (Cost Fetch Code)</label>
+                        <input type="text" name="cfc-number" id="cfc-number" placeholder="e.g., 98765-4321">
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label>Additional Notes</label>
+                    <textarea name="other-notes" id="other-notes" rows="4" placeholder="Any special requirements, accessibility needs, or setup instructions..."></textarea>
+                </div>
+
+                <div class="field-group">
+                    <label>Attach Media (optional)</label>
+                    <div class="upload-zone" id="upload-zone">
+                        <input type="file" name="media-upload" id="media-upload" accept="image/*,video/*" style="display: none;">
+                        <div class="upload-content">
+                            <i data-lucide="upload-cloud" style="width: 40px; height: 40px;"></i>
+                            <p>Drag & drop or click to upload</p>
+                            <small>Images (JPEG, PNG, GIF) or videos (MP4, MOV) up to 50MB</small>
+                        </div>
+                        <div class="upload-preview" id="upload-preview">
+                            <i data-lucide="file" style="width: 24px; height: 24px;"></i>
+                            <div class="file-info">
+                                <div class="file-name" id="preview-name"></div>
+                                <div class="file-size">Ready to upload</div>
+                            </div>
+                            <button type="button" id="remove-file" style="background: none; border: none; color: var(--muted); cursor: pointer;">
+                                <i data-lucide="x" style="width: 20px; height: 20px;"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Review -->
+            <div class="form-step" data-step="4">
+                <h2 style="font-weight: 800; margin: 0 0 20px;">Review Your Booking</h2>
+                
+                <div class="review-section">
+                    <h3>Event Details</h3>
+                    <div class="review-grid">
+                        <div class="review-item full-width">
+                            <label>Event Name</label>
+                            <div id="review-event-name">-</div>
+                        </div>
+                        <div class="review-item">
+                            <label>Space</label>
+                            <div id="review-event-space">-</div>
+                        </div>
+                        <div class="review-item">
+                            <label>Date</label>
+                            <div id="review-event-date">-</div>
+                        </div>
+                        <div class="review-item full-width">
+                            <label>Contact</label>
+                            <div id="review-contact">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="review-section" style="margin-top: 20px;">
+                    <h3>Schedule</h3>
+                    <div class="review-grid">
+                        <div class="review-item">
+                            <label>Registration</label>
+                            <div id="review-registration">-</div>
+                        </div>
+                        <div class="review-item">
+                            <label>Start</label>
+                            <div id="review-start">-</div>
+                        </div>
+                        <div class="review-item">
+                            <label>End</label>
+                            <div id="review-end">-</div>
+                        </div>
+                        <div class="review-item">
+                            <label>Shutdown</label>
+                            <div id="review-shutdown">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="review-section" style="margin-top: 20px;">
+                    <h3>Services</h3>
+                    <div id="review-recording">-</div>
+                    <div id="review-notes-section" style="margin-top: 15px; display: none;">
+                        <label style="font-size: 0.75rem; color: var(--muted);">Notes</label>
+                        <div id="review-notes">-</div>
+                    </div>
+                </div>
+
+                <div class="info-alert" style="margin-top: 20px;">
+                    <i data-lucide="send" style="width: 20px; height: 20px; color: var(--success);"></i>
+                    <div>
+                        <strong>Ready to submit?</strong>
+                        <span style="color: var(--muted); font-size: 0.9rem;">Click "Submit Booking" below and we'll review your request shortly.</span>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <div class="footer-nav">
+            <button type="button" class="btn-nav btn-back" id="btn-back" style="visibility: hidden;">← Back</button>
+            <button type="button" class="btn-nav btn-next" id="btn-next">Next Step →</button>
+            <button type="button" class="btn-nav btn-submit" id="btn-submit" style="display: none;">Submit Booking</button>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal fade" id="success-modal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" style="font-weight: 700;">Booking Submitted!</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <i data-lucide="check-circle" style="width: 80px; height: 80px;"></i>
+                    <h4 style="margin-top: 20px; font-weight: 700;">Thank You!</h4>
+                    <p style="color: var(--muted);">Your booking request has been submitted successfully. We'll be in touch shortly to confirm the details.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-modal" data-bs-dismiss="modal" onclick="window.location.reload()">Submit Another</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script>
+        // State
+        let currentStep = 1;
+        const totalSteps = 4;
+
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Initialize Flatpickr for date
+        flatpickr('#event-date', {
+            minDate: 'today',
+            maxDate: new Date().fp_incr(365),
+            dateFormat: 'F j, Y',
+            disableMobile: true
+        });
+
+        // Time presets
+        const presets = {
+            morning: { registration: '08:30', start: '09:00', end: '11:30', shutdown: '12:00' },
+            afternoon: { registration: '12:30', start: '13:00', end: '16:30', shutdown: '17:00' },
+            evening: { registration: '17:30', start: '18:00', end: '20:30', shutdown: '21:00' },
+            fullday: { registration: '08:30', start: '09:00', end: '16:30', shutdown: '17:00' }
+        };
+
+        // Preset buttons
+        document.querySelectorAll('.btn-preset').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const preset = presets[btn.dataset.preset];
+                if (preset) {
+                    document.getElementById('registration-time').value = preset.registration;
+                    document.getElementById('event-start-time').value = preset.start;
+                    document.getElementById('presentation-end-time').value = preset.end;
+                    document.getElementById('shutdown').value = preset.shutdown;
+                    
+                    document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    checkBudgetRequired();
+                }
+            });
+        });
+
+        // Choice cards - update selected state
+        document.querySelectorAll('.choice-card input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                const name = radio.name;
+                document.querySelectorAll(`input[name="${name}"]`).forEach(r => {
+                    r.closest('.choice-card').classList.toggle('selected', r.checked);
+                });
+            });
+        });
+
+        // File upload
+        const uploadZone = document.getElementById('upload-zone');
+        const uploadInput = document.getElementById('media-upload');
+        const previewName = document.getElementById('preview-name');
+        const removeFile = document.getElementById('remove-file');
+
+        uploadZone.addEventListener('click', () => uploadInput.click());
+        uploadInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                previewName.textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`;
+                document.querySelector('.upload-content').style.display = 'none';
+                document.getElementById('upload-preview').style.display = 'flex';
+            }
+        });
+
+        removeFile.addEventListener('click', (e) => {
+            e.stopPropagation();
+            uploadInput.value = '';
+            document.querySelector('.upload-content').style.display = 'block';
+            document.getElementById('upload-preview').style.display = 'none';
+        });
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                uploadInput.files = e.dataTransfer.files;
+                uploadInput.dispatchEvent(new Event('change'));
+            }
+        });
+
+        // Validate current step
+        function validateStep(step) {
+            const stepEl = document.querySelector(`.form-step[data-step="${step}"]`);
+            const requiredFields = stepEl.querySelectorAll('[required]');
+            let isValid = true;
+
+            requiredFields.forEach(field => {
+                field.classList.remove('is-invalid');
+                
+                if (field.type === 'radio') {
+                    const name = field.name;
+                    const checked = stepEl.querySelector(`input[name="${name}"]:checked`);
+                    if (!checked) {
+                        isValid = false;
+                        const container = field.closest('.space-grid, .option-grid');
+                        if (container) {
+                            container.style.animation = 'shake 0.5s ease';
+                            setTimeout(() => container.style.animation = '', 500);
+                        }
+                    }
+                } else if (!field.value.trim()) {
+                    isValid = false;
+                    field.classList.add('is-invalid');
+                }
+            });
+
+            return isValid;
+        }
+
+        // Show step
+        function showStep(step) {
+            document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.step-node').forEach((n, i) => {
+                const s = i + 1;
+                n.classList.toggle('active', s === step);
+                n.classList.toggle('completed', s < step);
+            });
+
+            document.querySelector(`.form-step[data-step="${step}"]`).classList.add('active');
+            document.getElementById('progress-fill').style.width = `${((step - 1) / (totalSteps - 1)) * 100}%`;
+            document.getElementById('btn-back').style.visibility = step === 1 ? 'hidden' : 'visible';
+            document.getElementById('btn-next').style.display = step === totalSteps ? 'none' : 'block';
+            document.getElementById('btn-submit').style.display = step === totalSteps ? 'block' : 'none';
+
+            if (step === totalSteps) updateReview();
+            
+            currentStep = step;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            lucide.createIcons();
+        }
+
+        // Update review
+        function updateReview() {
+            const spaceMap = {
+                'full': 'Event Hall Full',
+                'one-third': 'Event Hall 1/3',
+                'two-thirds': 'Event Hall 2/3',
+                'fleck-atrium': 'Fleck Atrium'
+            };
+            const recordingMap = {
+                'none': 'No Recording',
+                'basic-recording': 'Basic Recording',
+                'live-web-recording': 'Live Web Recording'
+            };
+
+            document.getElementById('review-event-name').textContent = document.getElementById('event-name').value || 'Untitled Event';
+            const spaceValue = document.querySelector('input[name="event-space"]:checked')?.value || '';
+            document.getElementById('review-event-space').textContent = spaceMap[spaceValue] || spaceValue;
+            document.getElementById('review-event-date').textContent = document.getElementById('event-date').value;
+            document.getElementById('review-contact').textContent = 
+                `${document.getElementById('person-of-contact').value} (${document.getElementById('email-address').value})`;
+            
+            document.getElementById('review-registration').textContent = formatTime(document.getElementById('registration-time').value);
+            document.getElementById('review-start').textContent = formatTime(document.getElementById('event-start-time').value);
+            document.getElementById('review-end').textContent = formatTime(document.getElementById('presentation-end-time').value);
+            document.getElementById('review-shutdown').textContent = formatTime(document.getElementById('shutdown').value);
+            
+            const recordingValue = document.querySelector('input[name="recording-option"]:checked')?.value || '';
+            document.getElementById('review-recording').textContent = recordingMap[recordingValue] || recordingValue;
+            
+            const notes = document.getElementById('other-notes').value;
+            const notesSection = document.getElementById('review-notes-section');
+            if (notes.trim()) {
+                notesSection.style.display = 'block';
+                document.getElementById('review-notes').textContent = notes;
+            } else {
+                notesSection.style.display = 'none';
+            }
+        }
+
+        function formatTime(time24) {
+            if (!time24) return '-';
+            const [hours, minutes] = time24.split(':');
+            const h = parseInt(hours);
+            return `${h % 12 || 12}:${minutes} ${h >= 12 ? 'PM' : 'AM'}`;
+        }
+
+        // Check budget required
+        function checkBudgetRequired() {
+            const dateInput = document.getElementById('event-date');
+            const shutdownInput = document.getElementById('shutdown');
+            const registrationInput = document.getElementById('registration-time');
+            const budgetAlert = document.getElementById('budget-alert');
+
+            if (!dateInput.value || !shutdownInput.value || !registrationInput.value) {
+                budgetAlert.style.display = 'none';
+                return;
+            }
+
+            const date = new Date(dateInput.value);
+            const dayOfWeek = date.getDay();
+            const shutdown = shutdownInput.value;
+            const registration = registrationInput.value;
+
+            let needsBudget = false;
+            const limits = {
+                0: { start: '08:00', end: '17:00' }, // Sunday
+                6: { start: '08:00', end: '17:00' }, // Saturday
+                5: { start: '07:00', end: '18:00' }, // Friday
+            };
+
+            const limit = limits[dayOfWeek] || { start: '07:00', end: '20:00' };
+            if (registration < limit.start || shutdown > limit.end) {
+                needsBudget = true;
+            }
+
+            budgetAlert.style.display = needsBudget ? 'flex' : 'none';
+        }
+
+        // Time input listeners
+        document.querySelectorAll('input[type="time"]').forEach(input => {
+            input.addEventListener('change', checkBudgetRequired);
+        });
+
+        // Navigation
+        document.getElementById('btn-next').addEventListener('click', () => {
+            if (validateStep(currentStep) && currentStep < totalSteps) {
+                showStep(currentStep + 1);
+            }
+        });
+
+        document.getElementById('btn-back').addEventListener('click', () => {
+            if (currentStep > 1) showStep(currentStep - 1);
+        });
+
+        // Submit
+        document.getElementById('btn-submit').addEventListener('click', async () => {
+            if (!validateStep(currentStep)) return;
+
+            const btn = document.getElementById('btn-submit');
+            btn.classList.add('loading');
+            btn.disabled = true;
+            btn.textContent = 'Submitting...';
+
+            try {
+                const form = document.getElementById('booking-form');
+                const formData = new FormData(form);
+
+                const response = await fetch('api/submit', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    const modal = new bootstrap.Modal(document.getElementById('success-modal'));
+                    modal.show();
+                } else {
+                    alert(result.message || 'Failed to submit booking. Please try again.');
+                }
+            } catch (error) {
+                console.error('Submission error:', error);
+                alert('Failed to submit booking. Please check your connection and try again.');
+            } finally {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+                btn.textContent = 'Submit Booking';
+            }
+        });
+
+        // Initialize
+        showStep(1);
+    </script>
+</body>
+</html>
