@@ -10,7 +10,6 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const escapeHtml = require('escape-html');
 const validator = require('validator');
-const { ICalCalendar } = require('ical-generator');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -195,6 +194,47 @@ function validateTimeOrder(registration, start, end, shutdown) {
     return { valid: true };
 }
 
+// Generate ICS calendar invite
+function generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, otherNotes) {
+    const eventId = `rotman-${Date.now()}@rotmanav.ca`;
+    const startDate = eventDate.replace(/-/g, '');
+    const startTime = eventStartTime.replace(':', '') + '00';
+    const endTime = shutdown.replace(':', '') + '00';
+    const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    
+    const desc = `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})${otherNotes ? `\n\nNotes: ${otherNotes}` : ''}`;
+    
+    return [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Rotman AV//Booking System//EN',
+        'METHOD:REQUEST',
+        'BEGIN:VEVENT',
+        `UID:${eventId}`,
+        `DTSTAMP:${now}`,
+        `DTSTART:${startDate}T${startTime}`,
+        `DTEND:${startDate}T${endTime}`,
+        `SUMMARY:${eventName || 'Untitled Event'}`,
+        `DESCRIPTION:${desc}`,
+        `LOCATION:${formatEventSpace(eventSpace)} - Rotman School of Management`,
+        'STATUS:CONFIRMED',
+        'SEQUENCE:0',
+        'BEGIN:ORGANIZER',
+        `CN:Rotman AV Services`,
+        `mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
+        'END:ORGANIZER',
+        'BEGIN:ATTENDEE',
+        `CN:${personOfContact}`,
+        `mailto:${emailAddress}`,
+        'ROLE:REQ-PARTICIPANT',
+        'PARTSTAT:NEEDS-ACTION',
+        'RSVP:TRUE',
+        'END:ATTENDEE',
+        'END:VEVENT',
+        'END:VCALENDAR'
+    ].join('\r\n');
+}
+
 // Sanitize user input for email HTML
 function sanitizeForEmail(input) {
     if (!input) return '';
@@ -324,36 +364,11 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
             to: process.env.EMAIL_TO || 'requests@rotmanav.ca',
             replyTo: emailAddress,
             subject: `📅 ${eventName || 'Untitled Event'} - ${eventDate}`,
-            html: emailHtml
-        };
-
-        // Create calendar invite (ICS)
-        const eventId = `rotman-${Date.now()}`;
-        const startDateTime = new Date(`${eventDate}T${eventStartTime}:00`);
-        const endDateTime = new Date(`${eventDate}T${shutdown}:00`);
-        
-        const calendar = new ICalCalendar();
-        calendar.createEvent({
-            id: eventId,
-            start: startDateTime,
-            end: endDateTime,
-            summary: eventName || 'Untitled Event',
-            description: `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})${sanitized.otherNotes ? `\n\nNotes: ${sanitized.otherNotes}` : ''}`,
-            location: `${formatEventSpace(eventSpace)} - Rotman School of Management`,
-            organizer: {
-                name: 'Rotman AV Services',
-                email: process.env.SMTP_USERNAME || 'requests@rotmanav.ca'
-            },
-            attendees: [
-                { name: personOfContact, email: emailAddress }
-            ]
-        });
-
-        // Attach calendar invite to email
-        mailOptions.icalEvent = {
-            filename: 'event.ics',
-            method: 'request',
-            content: calendar.toString()
+            html: emailHtml,
+            alternatives: [{
+                contentType: 'text/calendar; method=REQUEST; charset=utf-8',
+                content: generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, sanitized.otherNotes)
+            }]
         };
 
         const info = await transporter.sendMail(mailOptions);
