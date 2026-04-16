@@ -10,6 +10,7 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const escapeHtml = require('escape-html');
 const validator = require('validator');
+const { ICalCalendar } = require('ical-generator');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -317,13 +318,42 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
             </html>
         `;
 
-        // Send email
+        // Send email with calendar invite
         const mailOptions = {
-            from: `"AV Booking Form" <${process.env.SMTP_USERNAME || 'noreply@rotmanav.ca'}>`,
+            from: `"Rotman AV" <${process.env.SMTP_USERNAME || 'noreply@rotmanav.ca'}>`,
             to: process.env.EMAIL_TO || 'requests@rotmanav.ca',
             replyTo: emailAddress,
-            subject: `New Event Request: ${eventName || 'Untitled Event'}`,
+            subject: `📅 ${eventName || 'Untitled Event'} - ${eventDate}`,
             html: emailHtml
+        };
+
+        // Create calendar invite (ICS)
+        const eventId = `rotman-${Date.now()}`;
+        const startDateTime = new Date(`${eventDate}T${eventStartTime}:00`);
+        const endDateTime = new Date(`${eventDate}T${shutdown}:00`);
+        
+        const calendar = new ICalCalendar();
+        calendar.createEvent({
+            id: eventId,
+            start: startDateTime,
+            end: endDateTime,
+            summary: eventName || 'Untitled Event',
+            description: `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})${sanitized.otherNotes ? `\n\nNotes: ${sanitized.otherNotes}` : ''}`,
+            location: `${formatEventSpace(eventSpace)} - Rotman School of Management`,
+            organizer: {
+                name: 'Rotman AV Services',
+                email: process.env.SMTP_USERNAME || 'requests@rotmanav.ca'
+            },
+            attendees: [
+                { name: personOfContact, email: emailAddress }
+            ]
+        });
+
+        // Attach calendar invite to email
+        mailOptions.icalEvent = {
+            filename: 'event.ics',
+            method: 'request',
+            content: calendar.toString()
         };
 
         const info = await transporter.sendMail(mailOptions);
@@ -337,7 +367,7 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
 
         res.json({
             success: true,
-            message: 'Booking submitted successfully!',
+            message: 'Booking submitted successfully! Calendar invite sent.',
             previewUrl: previewUrl || null
         });
 
