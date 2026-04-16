@@ -1,4 +1,7 @@
 require('dotenv').config();
+
+// Password from env var (works better with special chars than .env)
+const smtpPassword = process.env.SMTP_PASSWORD || process.env.TITAN_PASSWORD;
 const express = require('express');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
@@ -103,7 +106,7 @@ async function initializeEmailTransporter() {
                 secure: process.env.SMTP_SECURE === 'true',
                 auth: {
                     user: process.env.SMTP_USERNAME,
-                    pass: process.env.SMTP_PASSWORD
+                    pass: smtpPassword
                 }
             });
             console.log('Using production SMTP:', process.env.SMTP_HOST);
