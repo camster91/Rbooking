@@ -8,12 +8,11 @@ A standalone event booking application for Rotman AV Services.
 git clone https://github.com/camster91/rotman-av-booking.git
 cd rotman-av-booking
 npm install
+cp .env.example .env   # then set AUTH_PASS and your SMTP settings
 npm start
 ```
 
-Visit http://localhost:3000 and login with:
-- **Username**: `admin`
-- **Password**: `rotman2025`
+Visit http://localhost:3000 and log in with your `AUTH_USER` / `AUTH_PASS` from `.env`.
 
 ## Configuration
 
@@ -32,7 +31,7 @@ SMTP_PORT=587
 SMTP_SECURE=false
 SMTP_USERNAME=requests@rotmanav.ca
 SMTP_PASSWORD=your_password_here
-EMAIL_TO=cameron.ashley@utoronto.ca
+EMAIL_TO=requests@rotmanav.ca
 BASE_URL=http://localhost:3000
 AUTH_USER=admin
 AUTH_PASS=your_auth_password
@@ -50,20 +49,20 @@ AUTH_PASS=your_auth_password
 - ✅ **Input validation & XSS protection**
 - ✅ **Basic auth protection**
 - ✅ **Health check endpoint**
-- ✅ **Full test suite** (16 tests)
+- ✅ **Full test suite** (26 tests)
 
 ## API
 
 ### Submit Booking
 ```
 POST /api/submit
-Authorization: Basic auth (admin:rotman2025)
+Authorization: Basic auth (your AUTH_USER:AUTH_PASS)
 Content-Type: multipart/form-data
 
 Fields:
 - event-space: full, one-third, two-thirds, fleck-atrium
 - event-name: Event title
-- event-date: YYYY-MM-DD
+- event-date: YYYY-MM-DD ("May 1, 2026" also accepted - this is what the form sends)
 - person-of-contact: Contact name
 - email-address: Contact email
 - registration-time: HH:MM
@@ -85,16 +84,23 @@ GET /health
 ## Development
 
 ```bash
-npm test          # Run tests (16 passing)
+npm test          # Run the test suite
 npm run lint      # Lint code
 npm run lint:fix  # Auto-fix linting
 ```
 
 ## Docker Deployment
 
+The image sets `NODE_ENV=production`, so the app refuses to start unless `AUTH_PASS`, `SMTP_HOST` and `SMTP_PASSWORD` are set — it fails loudly instead of silently losing bookings.
+
 ```bash
 docker build -t rotman-av-booking .
 docker run -p 3000:3000 \
+  --restart unless-stopped \
+  -v rotman-av-uploads:/app/uploads \
+  -e AUTH_USER=admin \
+  -e AUTH_PASS="set_a_strong_password" \
+  -e BASE_URL="https://your-deployment.example.com" \
   -e SMTP_PASSWORD="your_password" \
   rotman-av-booking
 ```
@@ -104,14 +110,15 @@ docker run -p 3000:3000 \
 | Variable | Description | Default |
 |----------|-------------|---------|
 | PORT | Server port | 3000 |
-| SMTP_HOST | SMTP server | smtp.titan.email |
+| NODE_ENV | production in the Docker image (enables fail-fast guards) | development |
+| SMTP_HOST | SMTP server (required in production) | - |
 | SMTP_PORT | SMTP port | 587 |
 | SMTP_USERNAME | Email address | requests@rotmanav.ca |
 | SMTP_PASSWORD | Email password | - |
-| EMAIL_TO | Recipient email | - |
+| EMAIL_TO | Recipient email | requests@rotmanav.ca |
 | BASE_URL | Public URL | http://localhost:3000 |
 | AUTH_USER | Auth username | admin |
-| AUTH_PASS | Auth password | rotman2025 |
+| AUTH_PASS | Auth password (required in production) | development default only |
 
 ## License
 

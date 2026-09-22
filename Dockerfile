@@ -6,6 +6,10 @@ FROM node:20-alpine
 # Create app directory
 WORKDIR /app
 
+# Production mode: enables the app's fail-fast guards (AUTH_PASS, SMTP config)
+# and Express's concise error handling
+ENV NODE_ENV=production
+
 # Copy package files
 COPY package*.json ./
 

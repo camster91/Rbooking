@@ -7,23 +7,45 @@ const multer = require('multer');
 const nodemailer = require('nodemailer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const escapeHtml = require('escape-html');
 const validator = require('validator');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-// Basic Auth — protects all pages
+// Basic Auth — protects all pages.
+// The fallback password is published in this repo's docs and history, so a
+// production deployment must refuse to run on it.
 const AUTH_USER = process.env.AUTH_USER || 'admin';
-const AUTH_PASS = process.env.AUTH_PASS || 'rotman2025';
+const AUTH_PASS = process.env.AUTH_PASS || (!IS_PRODUCTION ? 'rotman2025' : null);
+
+if (!AUTH_PASS || AUTH_PASS === 'rotman2025') {
+    if (IS_PRODUCTION) {
+        console.error('FATAL: set AUTH_PASS to a strong password. NODE_ENV=production refuses the known default.');
+        process.exit(1);
+    }
+    console.warn('WARNING: AUTH_PASS not set - using the known development default. Never deploy this.');
+}
+
+function constantTimeEqual(a, b) {
+    const bufA = Buffer.from(String(a));
+    const bufB = Buffer.from(String(b));
+    return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
 
 function basicAuth(req, res, next) {
     const hdr = req.headers.authorization || '';
-    if (hdr.startsWith('Basic ')) {
+    if (hdr.slice(0, 6).toLowerCase() === 'basic ') {
         const decoded = Buffer.from(hdr.slice(6), 'base64').toString();
-        const [user, pass] = decoded.split(':');
-        if (user === AUTH_USER && pass === AUTH_PASS) return next();
+        // Per RFC 7617 the password is everything after the FIRST colon (a
+        // password may itself contain colons).
+        const colon = decoded.indexOf(':');
+        const user = colon === -1 ? decoded : decoded.slice(0, colon);
+        const pass = colon === -1 ? '' : decoded.slice(colon + 1);
+        if (constantTimeEqual(user, AUTH_USER) && constantTimeEqual(pass, AUTH_PASS)) return next();
     }
     res.set('WWW-Authenticate', 'Basic realm="Rotman AV"');
     return res.status(401).send('Authentication required');
@@ -71,23 +93,31 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 app.use('/uploads', express.static(uploadsDir));
 
+// Email transporter - initialized async (see initializeEmailTransporter)
+let transporter = null;
+// One of: 'uninitialized' | 'test' | 'smtp' | 'ethereal' | 'console'
+let emailMode = 'uninitialized';
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        email: transporter ? 'configured' : 'not configured'
+        email: {
+            mode: emailMode,
+            configured: Boolean(transporter),
+            // In production anything other than real SMTP means bookings are not delivered
+            degraded: IS_PRODUCTION && emailMode !== 'smtp'
+        }
     });
 });
-
-// Email transporter - initialized async
-let transporter = null;
 
 async function initializeEmailTransporter() {
     // Use console logging in test environment
     if (process.env.NODE_ENV === 'test') {
         console.log('Test environment - using console logging mode');
+        emailMode = 'test';
         transporter = {
             sendMail: async (options) => {
                 console.log('Email sent (test mode):', options.subject);
@@ -97,12 +127,12 @@ async function initializeEmailTransporter() {
         return;
     }
 
-    // Check if using production SMTP
-    if (process.env.SMTP_HOST && process.env.SMTP_PASSWORD) {
+    // Production SMTP
+    if (process.env.SMTP_HOST && smtpPassword) {
         try {
             transporter = nodemailer.createTransport({
                 host: process.env.SMTP_HOST,
-                port: parseInt(process.env.SMTP_PORT) || 587,
+                port: parseInt(process.env.SMTP_PORT, 10) || 587,
                 secure: process.env.SMTP_SECURE === 'true',
                 auth: {
                     user: process.env.SMTP_USERNAME,
@@ -110,48 +140,54 @@ async function initializeEmailTransporter() {
                 }
             });
             console.log('Using production SMTP:', process.env.SMTP_HOST);
-            console.log('SMTP Port:', process.env.SMTP_PORT);
-            console.log('SMTP Secure:', process.env.SMTP_SECURE);
 
             // Verify SMTP connection
             await transporter.verify();
             console.log('SMTP connection verified successfully');
+            emailMode = 'smtp';
+            return;
         } catch (smtpError) {
+            // In production a failed SMTP connection means every booking email
+            // would be silently lost - refuse to start instead.
+            if (IS_PRODUCTION) {
+                throw new Error(`SMTP connection failed (${smtpError.message}) - refusing to start in production`);
+            }
             console.error('SMTP configuration error:', smtpError.message);
-            console.log('Falling back to Ethereal test email...');
+            console.log('Falling back to Ethereal test email (development only)...');
             transporter = null;
         }
+    } else if (IS_PRODUCTION) {
+        throw new Error('SMTP_HOST and SMTP_PASSWORD are required in production - refusing to start without a real mail transport');
     }
 
-    // Fallback if no production SMTP or SMTP failed
-    if (!transporter) {
-        try {
-            const testAccount = await nodemailer.createTestAccount();
-            transporter = nodemailer.createTransport({
-                host: 'smtp.ethereal.email',
-                port: 587,
-                secure: false,
-                auth: {
-                    user: testAccount.user,
-                    pass: testAccount.pass
-                }
-            });
-            console.log('Using Ethereal test email');
-            console.log('View sent emails at: https://ethereal.email');
-            console.log('Login:', testAccount.user);
-        } catch (err) {
-            console.log('No email service available - using console logging mode');
-            transporter = {
-                sendMail: async (options) => {
-                    console.log('\n========== EMAIL PREVIEW ==========');
-                    console.log('To:', options.to);
-                    console.log('From:', options.from);
-                    console.log('Subject:', options.subject);
-                    console.log('====================================\n');
-                    return { messageId: 'console-' + Date.now() };
-                }
-            };
-        }
+    // Development fallback: the Ethereal test inbox. Messages there are thrown
+    // away within hours - fine for development, catastrophic for bookings.
+    try {
+        const testAccount = await nodemailer.createTestAccount();
+        transporter = nodemailer.createTransport({
+            host: 'smtp.ethereal.email',
+            port: 587,
+            secure: false,
+            auth: {
+                user: testAccount.user,
+                pass: testAccount.pass
+            }
+        });
+        emailMode = 'ethereal';
+        console.warn('WARNING: using the Ethereal TEST inbox - email is NOT really delivered. Preview at https://ethereal.email');
+    } catch {
+        emailMode = 'console';
+        console.warn('WARNING: no email service available - booking emails will only be logged to the console');
+        transporter = {
+            sendMail: async (options) => {
+                console.log('\n========== EMAIL PREVIEW ==========');
+                console.log('To:', options.to);
+                console.log('From:', options.from);
+                console.log('Subject:', options.subject);
+                console.log('====================================\n');
+                return { messageId: 'console-' + Date.now() };
+            }
+        };
     }
 }
 
@@ -170,9 +206,14 @@ function validateEmail(email) {
     return email && validator.isEmail(email);
 }
 
+const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 function validateTimeOrder(registration, start, end, shutdown) {
     const times = [registration, start, end, shutdown];
     if (times.some(t => !t)) return { valid: false, message: 'All time fields are required' };
+    if (times.some(t => !TIME_FORMAT.test(t))) {
+        return { valid: false, message: 'All times must be valid 24-hour HH:MM values (e.g. 09:00)' };
+    }
 
     const toMinutes = (time) => {
         const [hours, minutes] = time.split(':').map(Number);
@@ -194,45 +235,107 @@ function validateTimeOrder(registration, start, end, shutdown) {
     return { valid: true };
 }
 
-// Generate ICS calendar invite
+// The UI's flatpickr submits 'F j, Y' (e.g. "May 1, 2026") while the API
+// contract documents ISO dates; accept both and return normalized YYYY-MM-DD.
+const MONTHS = {
+    january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
+    july: 7, august: 8, september: 9, october: 10, november: 11, december: 12
+};
+
+function parseEventDate(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const value = raw.trim();
+    let y, m, d;
+
+    const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const pretty = iso ? null : value.match(/^([A-Za-z]+) (\d{1,2}), (\d{4})$/);
+    if (iso) {
+        y = Number(iso[1]); m = Number(iso[2]); d = Number(iso[3]);
+    } else if (pretty) {
+        m = MONTHS[pretty[1].toLowerCase()];
+        d = Number(pretty[2]); y = Number(pretty[3]);
+        if (!m) return null;
+    } else {
+        return null;
+    }
+
+    // Reject impossible dates (2026-02-30, etc.)
+    const date = new Date(Date.UTC(y, m - 1, d));
+    if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+    return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// RFC 5545 TEXT escaping: backslash, semicolon, comma; embedded newlines
+// become a literal escape sequence so they can never forge new properties.
+function escapeICalText(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/;/g, '\\;')
+        .replace(/,/g, '\\,')
+        .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+// RFC 5545 param values cannot hold quotes or backslashes at all: strip them.
+function escapeICalParam(value) {
+    return String(value ?? '')
+        .replace(/["\\]/g, '')
+        .replace(/[\r\n]+/g, ' ');
+}
+
+// RFC 5545 3.1: content lines longer than 75 octets must be folded with CRLF + space.
+function foldICalLine(line) {
+    if (Buffer.byteLength(line, 'utf8') <= 75) return line;
+    const folded = [];
+    let current = '';
+    let currentBytes = 0;
+    for (const char of line) {
+        const charBytes = Buffer.byteLength(char, 'utf8');
+        if (currentBytes + charBytes > 75) {
+            folded.push(current);
+            current = ' ';
+            currentBytes = 1;
+        }
+        current += char;
+        currentBytes += charBytes;
+    }
+    folded.push(current);
+    return folded.join('\r\n');
+}
+
+// Generate ICS calendar invite. eventDate must be a parseEventDate-validated
+// YYYY-MM-DD and the times validateTimeOrder-validated HH:MM strings.
 function generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, otherNotes) {
-    const eventId = `rotman-${Date.now()}@rotmanav.ca`;
-    const startDate = eventDate.replace(/-/g, '');
+    const dateCompact = eventDate.replace(/-/g, '');
     const startTime = eventStartTime.replace(':', '') + '00';
     const endTime = shutdown.replace(':', '') + '00';
+    const eventId = `rotman-${Date.now()}@rotmanav.ca`;
     const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    
-    const desc = `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})${otherNotes ? `\n\nNotes: ${otherNotes}` : ''}`;
-    
-    return [
+
+    let desc = `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})`;
+    if (otherNotes) desc += `\n\nNotes: ${otherNotes}`;
+
+    const lines = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
         'PRODID:-//Rotman AV//Booking System//EN',
+        'CALSCALE:GREGORIAN',
         'METHOD:REQUEST',
         'BEGIN:VEVENT',
         `UID:${eventId}`,
         `DTSTAMP:${now}`,
-        `DTSTART:${startDate}T${startTime}`,
-        `DTEND:${startDate}T${endTime}`,
-        `SUMMARY:${eventName || 'Untitled Event'}`,
-        `DESCRIPTION:${desc}`,
-        `LOCATION:${formatEventSpace(eventSpace)} - Rotman School of Management`,
+        `DTSTART:${dateCompact}T${startTime}`,
+        `DTEND:${dateCompact}T${endTime}`,
+        `SUMMARY:${escapeICalText(eventName || 'Untitled Event')}`,
+        `DESCRIPTION:${escapeICalText(desc)}`,
+        `LOCATION:${escapeICalText(`${formatEventSpace(eventSpace)} - Rotman School of Management`)}`,
         'STATUS:CONFIRMED',
         'SEQUENCE:0',
-        'BEGIN:ORGANIZER',
-        `CN:Rotman AV Services`,
-        `mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
-        'END:ORGANIZER',
-        'BEGIN:ATTENDEE',
-        `CN:${personOfContact}`,
-        `mailto:${emailAddress}`,
-        'ROLE:REQ-PARTICIPANT',
-        'PARTSTAT:NEEDS-ACTION',
-        'RSVP:TRUE',
-        'END:ATTENDEE',
+        `ORGANIZER;CN:"${escapeICalParam('Rotman AV Services')}":mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
+        `ATTENDEE;CN:"${escapeICalParam(personOfContact)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${emailAddress}`,
         'END:VEVENT',
         'END:VCALENDAR'
-    ].join('\r\n');
+    ];
+    return lines.map(foldICalLine).join('\r\n');
 }
 
 // Sanitize user input for email HTML
@@ -265,7 +368,13 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
             return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
         }
 
-        // Validate time order
+        // Validate event date (accepts both the UI's "May 1, 2026" and ISO YYYY-MM-DD)
+        const isoDate = parseEventDate(eventDate);
+        if (!isoDate) {
+            return res.status(400).json({ success: false, message: 'Please provide a valid event date' });
+        }
+
+        // Validate time format and order
         const timeValidation = validateTimeOrder(registrationTime, eventStartTime, presentationEndTime, shutdown);
         if (!timeValidation.valid) {
             return res.status(400).json({ success: false, message: timeValidation.message });
@@ -367,7 +476,8 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
             html: emailHtml,
             alternatives: [{
                 contentType: 'text/calendar; method=REQUEST; charset=utf-8',
-                content: generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, sanitized.otherNotes)
+                // generateICS escapes per RFC 5545 itself - pass raw values, not HTML-escaped ones
+                content: generateICS(isoDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, otherNotes)
             }]
         };
 
@@ -420,7 +530,10 @@ module.exports = {
     formatRecordingOption,
     validateEmail,
     validateTimeOrder,
-    sanitizeForEmail
+    sanitizeForEmail,
+    parseEventDate,
+    escapeICalText,
+    generateICS
 };
 
 // Start server (only if run directly)
@@ -432,5 +545,8 @@ async function startServer() {
 }
 
 if (require.main === module) {
-    startServer().catch(console.error);
+    startServer().catch((err) => {
+        console.error('FATAL: server failed to start:', err.message);
+        process.exit(1);
+    });
 }
