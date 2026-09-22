@@ -2,6 +2,8 @@
 
 A standalone event booking application for Rotman AV Services.
 
+Current release: **v1.1.0** — see [CHANGELOG.md](CHANGELOG.md).
+
 ## Quick Start
 
 ```bash

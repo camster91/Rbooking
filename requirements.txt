@@ -1,4 +1,0 @@
-# Rotman AV Booking - Python Dependencies
-# For email sending via Playwright headless browser
-
-playwright>=1.40.0
