@@ -4,6 +4,14 @@
 	"main": "src/index.js",
 	"compatibility_date": "2026-09-30",
 
+	// Lives at rotmanav.ca/book (the rest of rotmanav.ca is untouched).
+	// Two patterns so /bookings, /booklet etc. are not caught.
+	"routes": [
+		{ "pattern": "rotmanav.ca/book", "zone_name": "rotmanav.ca" },
+		{ "pattern": "rotmanav.ca/book/*", "zone_name": "rotmanav.ca" }
+	],
+	"workers_dev": false,
+
 	// The Worker runs first on every request so it can check the login before
 	// serving a page from public/.
 	"assets": {
@@ -43,6 +51,7 @@
 	// Non-secret settings. Secrets (AUTH_PASS, ADMIN_PASS, SMTP_PASSWORD) are
 	// set with: npx wrangler secret put <NAME>
 	"vars": {
+		"BASE_PATH": "/book",
 		"AUTH_USER": "admin",
 		"ADMIN_USER": "av-admin",
 		"EMAIL_TO": "requests@rotmanav.ca",

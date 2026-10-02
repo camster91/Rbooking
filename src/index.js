@@ -117,8 +117,14 @@ function crossSite(request) {
 // ---------------------------------------------------------------------------
 // Helpers
 
+// The app can live under a path on a bigger site, e.g. BASE_PATH=/book for
+// rotmanav.ca/book. Pages use relative links, so they work under any prefix.
+function basePath(env) {
+    return (env.BASE_PATH || '').replace(/\/+$/, '');
+}
+
 function baseUrl(request, env) {
-    return (env.BASE_URL || new URL(request.url).origin).replace(/\/$/, '');
+    return (env.BASE_URL || new URL(request.url).origin + basePath(env)).replace(/\/$/, '');
 }
 
 function randomHex(bytes = 12) {
@@ -381,9 +387,17 @@ export async function purgeOldUploads(env, now = new Date()) {
 
 async function route(request, env) {
     const url = new URL(request.url);
-    const path = url.pathname;
     const method = request.method;
     mail.configureMail(env);
+
+    let path = url.pathname;
+    const prefix = basePath(env);
+    if (prefix) {
+        // "/book" -> "/book/" so the pages' relative links resolve under it
+        if (path === prefix) return Response.redirect(`${url.origin}${prefix}/${url.search}`, 301);
+        if (!path.startsWith(prefix + '/')) return new Response('Not found', { status: 404 });
+        path = path.slice(prefix.length);
+    }
 
     // Public: lets uptime monitors check the app without a login.
     if (path === '/health') {

@@ -326,3 +326,28 @@ describe('upload cleanup', () => {
         expect((await store().get(keep.id)).uploadKey).toBe(keepKey);
     });
 });
+
+describe('running under a path (rotmanav.ca/book)', () => {
+    const book = { BASE_PATH: '/book' };
+
+    it('redirects /book to /book/ and serves the app under it', async () => {
+        const bare = await call('/book', { envOverride: book });
+        expect(bare.status).toBe(301);
+        expect(bare.headers.get('location')).toBe('https://booking.test/book/');
+        expect((await call('/book/', { envOverride: book })).status).toBe(200);
+        expect((await call('/book/admin', { auth: ADMIN, envOverride: book })).status).toBe(200);
+        expect((await call('/book/health', { auth: null, envOverride: book })).status).toBe(200);
+        expect((await call('/', { envOverride: book })).status).toBe(404);
+        expect((await call('/bookings', { envOverride: book })).status).toBe(404);
+    });
+
+    it('takes bookings and puts the path in email links', async () => {
+        const res = await call('/book/api/submit', {
+            method: 'POST', envOverride: book,
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(bookingForm())
+        });
+        expect(res.status).toBe(200);
+        expect(staffMail().html).toContain(`https://booking.test/book/admin#booking-${res.data.id}`);
+    });
+});

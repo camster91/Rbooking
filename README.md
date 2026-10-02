@@ -50,7 +50,7 @@ npx wrangler secret put SMTP_PASSWORD    # Titan mailbox password
 npm run deploy
 ```
 
-The app is then live at `https://rbooking.<your-subdomain>.workers.dev`. To use your own domain, add it under the Worker's **Settings → Domains & Routes** in the Cloudflare dashboard (the domain must use Cloudflare DNS).
+The app is then live at **https://rotmanav.ca/book/** (set by `routes` and `BASE_PATH` in `wrangler.jsonc`; the rest of rotmanav.ca is not affected). The admin page is at https://rotmanav.ca/book/admin.
 
 Until `AUTH_PASS` and `ADMIN_PASS` are set, every page answers "Not set up yet" — the app never runs without passwords.
 
@@ -66,7 +66,8 @@ Non-secret settings live in `wrangler.jsonc` under `vars`:
 | SMTP_HOST / SMTP_PORT | Mail server (587 = STARTTLS, 465 = TLS) | smtp.titan.email / 587 |
 | SMTP_USERNAME | Mailbox that sends the emails | requests@rotmanav.ca |
 | UPLOAD_RETENTION_DAYS | Delete uploads this many days after the event | 90 |
-| BASE_URL | Optional: public URL used in email links (defaults to the request's address) | — |
+| BASE_PATH | Path the app lives under | /book |
+| BASE_URL | Optional: public URL used in email links (defaults to the request's address + BASE_PATH) | — |
 
 Secrets (set with `wrangler secret put`): `AUTH_PASS`, `ADMIN_PASS`, `SMTP_PASSWORD`.
 
@@ -95,7 +96,7 @@ Booking fields: `event-name`, `event-space` (full, one-third, two-thirds, fleck-
 ```bash
 cp .dev.vars.example .dev.vars   # local passwords; emails are printed, not sent
 npm run db:migrate:local
-npm run dev                      # http://localhost:8787
+npm run dev                      # http://localhost:8787/book/
 
 npm test                         # tests run inside the Workers runtime
 npm run lint
