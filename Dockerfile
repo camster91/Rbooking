@@ -1,20 +1,23 @@
 # Rotman AV Event Booking System - Dockerfile
 
 # Use Node.js LTS Alpine for smaller image
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Create app directory
 WORKDIR /app
 
-# Production mode: enables the app's fail-fast guards (AUTH_PASS, SMTP config)
+# Production mode: enables the app's fail-fast guards (AUTH_PASS, ADMIN_PASS, SMTP config)
 # and Express's concise error handling
 ENV NODE_ENV=production
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --omit=dev
+# Install dependencies. better-sqlite3 normally downloads a prebuilt binary;
+# the build tools are only a fallback and are removed afterwards.
+RUN apk add --no-cache --virtual .build-deps python3 make g++ && \
+    npm ci --omit=dev && \
+    apk del .build-deps
 
 # Copy app source
 COPY . .
@@ -23,8 +26,8 @@ COPY . .
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S booking -u 1001
 
-# Create uploads directory and set permissions
-RUN mkdir -p uploads && chown -R booking:nodejs /app
+# Create uploads and data (bookings database) directories and set permissions
+RUN mkdir -p uploads data && chown -R booking:nodejs /app
 USER booking
 
 # Expose port

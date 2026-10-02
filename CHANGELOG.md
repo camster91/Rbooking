@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## v1.2.0 — 2026-10-02
+
+### Added
+- **Bookings database** — every request is saved (SQLite in `data/`), so nothing lives only in an inbox.
+- **Admin page** at `/admin` (separate `ADMIN_USER` / `ADMIN_PASS` login) to review, approve, decline and cancel bookings, with search and clash warnings.
+- **Double-booking check** — the form shows times already taken; a request that clashes with an approved booking is refused, and one that clashes with a pending request is flagged for staff. Approving a booking that clashes with an approved one is blocked.
+- **Emails to the requester** — a confirmation when they submit, then an email when the booking is approved (with calendar invite), declined, or cancelled (with a calendar cancel).
+- Staff calendar entries now start as tentative and update when a booking is approved or removed.
+- Failed-login limit (30 per 15 minutes per IP).
+- Uploaded files are deleted 90 days after the event (`UPLOAD_RETENTION_DAYS`), and files from rejected submissions are deleted straight away.
+
+### Changed
+- Docker image moved to Node 22 (Node 20 is end-of-life); Node 20+ is now required.
+- **`ADMIN_PASS` is now required in production** — the app won't start without it.
+- Uploaded files can only be opened with the staff login, and file names are random.
+- Event dates in the past are rejected; space and recording option must be valid choices.
+
+### Booking form UI
+- Fixed: the form had no inner padding, so fields touched the card edges.
+- Fixed: space and recording cards showed tiny uppercase grey text.
+- Fixed: the progress line ran past the last step; steps now have names.
+- Fixed: time-picker icons were black on the dark background.
+- Errors now show next to each field instead of pop-up alerts; email format, time order and budget numbers are checked before moving on.
+- The review step shows budget numbers and the attached file, with Edit links.
+- Keyboard focus is visible on the choice cards and upload box; labels are linked to their fields.
+- The success message shows the request number and says it isn't confirmed yet.
+- CDN libraries are pinned to fixed versions.
+
 
 ### Fixed
 - **Calendar invites** — `ORGANIZER`/`ATTENDEE` used `CN:` instead of `CN=`, which made the invite invalid for strict calendar apps.

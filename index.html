@@ -6,15 +6,18 @@
     <title>Event Booking - Rotman AV</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/themes/dark.css">
+    <script src="https://unpkg.com/lucide@1.50.0/dist/umd/lucide.min.js"></script>
     <style>
         :root {
+            /* Native controls (time pickers, scrollbars) draw for a dark page */
+            color-scheme: dark;
             --rotman-blue: #00355f;
             --accent: #2563eb;
             --accent-hover: #1d4ed8;
             --success: #10b981;
+            --warning: #f59e0b;
             --danger: #ef4444;
             --bg: #0f172a;
             --card-bg: rgba(30, 41, 59, 0.7);
@@ -22,10 +25,11 @@
             --muted: #94a3b8;
             --border: rgba(255, 255, 255, 0.1);
         }
-        
+
         * { box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: radial-gradient(circle at top left, #1e293b, #0f172a); color: var(--text); padding: 20px; min-height: 100vh; }
-        
+        html { background: #0f172a; }
+        body { font-family: 'Inter', sans-serif; background: radial-gradient(circle at top left, #1e293b, #0f172a) fixed; color: var(--text); padding: 20px; min-height: 100vh; }
+
         .booking-card {
             background: var(--card-bg);
             backdrop-filter: blur(12px);
@@ -44,32 +48,43 @@
             align-items: center;
             gap: 15px;
         }
-        .header-icon { width: 50px; height: 50px; background: rgba(255,255,255,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+        .header-icon { width: 50px; height: 50px; background: rgba(255,255,255,0.1); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .header h1 { margin: 0; font-size: 1.5rem; font-weight: 800; }
         .header p { margin: 5px 0 0; opacity: 0.8; font-size: 0.9rem; }
 
-        .progress-container { background: rgba(0,0,0,0.2); padding: 20px 40px; border-bottom: 1px solid var(--border); }
-        .step-indicators { display: flex; justify-content: space-between; position: relative; }
-        .step-indicators::before { content: ''; position: absolute; top: 15px; left: 20px; right: 20px; height: 2px; background: var(--border); z-index: 1; }
-        
-        .step-node { width: 32px; height: 32px; border-radius: 50%; background: var(--bg); border: 2px solid var(--border); z-index: 3; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; transition: all 0.3s; position: relative; }
-        .step-node.active { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 15px rgba(37, 99, 235, 0.4); }
-        .step-node.completed { background: var(--accent); border-color: var(--accent); color: white; }
-        .step-node.completed::after { content: '✓'; }
+        /* Step indicator: nodes sit on a line; the fill runs node-centre to node-centre */
+        .progress-container { background: rgba(0,0,0,0.2); padding: 20px 40px 38px; border-bottom: 1px solid var(--border); }
+        .step-indicators { display: flex; justify-content: space-between; position: relative; list-style: none; margin: 0; padding: 0; }
+        .step-indicators::before { content: ''; position: absolute; top: 15px; left: 16px; right: 16px; height: 2px; background: var(--border); z-index: 1; }
+        .progress-fill { position: absolute; top: 15px; left: 16px; height: 2px; background: var(--accent); z-index: 2; transition: width 0.3s ease; }
 
-        .progress-fill { position: absolute; top: 15px; left: 20px; height: 2px; background: var(--accent); z-index: 2; transition: width 0.3s ease; }
+        .step-node { width: 32px; height: 32px; border-radius: 50%; background: var(--bg); border: 2px solid var(--border); z-index: 3; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; color: var(--muted); transition: all 0.3s; position: relative; }
+        .step-node.active { border-color: var(--accent); color: white; box-shadow: 0 0 15px rgba(37, 99, 235, 0.4); }
+        .step-node.completed { background: var(--accent); border-color: var(--accent); color: white; }
+        .step-node.completed .step-num { display: none; }
+        .step-node.completed::after { content: '✓'; }
+        .step-label { position: absolute; top: 38px; white-space: nowrap; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+        .step-node.active .step-label { color: white; }
+        .step-node[data-step="1"] .step-label { left: 0; }
+        .step-node[data-step="4"] .step-label { right: 0; }
 
         .form-content { padding: 40px; }
         .form-step { display: none; }
         .form-step.active { display: block; animation: fadeIn 0.4s ease; }
+        .form-step h2 { font-weight: 800; margin: 0 0 20px; font-size: 1.6rem; }
+        .step-intro { color: var(--muted); margin: -10px 0 25px; }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes shake { 0%, 100% { transform: translateX(0); } 10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); } 20%, 40%, 60%, 80% { transform: translateX(5px); } }
         .shake { animation: shake 0.5s ease; }
+        @media (prefers-reduced-motion: reduce) { .form-step.active, .shake { animation: none; } }
 
         .field-group { margin-bottom: 25px; }
-        label { display: block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
-        
+        .field-label { display: block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
+        .field-hint { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+        .field-error { display: none; font-size: 0.85rem; color: #fca5a5; margin-top: 6px; }
+        .field-error.show { display: block; }
+
         input, select, textarea {
             width: 100%;
             background: rgba(255,255,255,0.05);
@@ -80,16 +95,20 @@
             transition: all 0.2s;
             font-size: 1rem;
         }
+        input::placeholder, textarea::placeholder { color: #64748b; }
         input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; background: rgba(255,255,255,0.08); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2); }
         input.is-invalid, select.is-invalid, textarea.is-invalid { border-color: var(--danger); background: rgba(239, 68, 68, 0.1); }
-        
-        .space-grid, .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
-        
+
+        .space-grid, .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 15px; }
+        .choice-grid.is-invalid .choice-card { border-color: rgba(239, 68, 68, 0.6); }
+
         .choice-card {
+            display: block;
             background: rgba(255,255,255,0.03);
             border: 2px solid var(--border);
             border-radius: 16px;
             padding: 20px;
+            margin: 0;
             cursor: pointer;
             text-align: center;
             transition: all 0.2s;
@@ -97,20 +116,35 @@
         }
         .choice-card:hover { border-color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.05); }
         .choice-card.selected { border-color: var(--accent); background: rgba(37, 99, 235, 0.15); }
-        .choice-card i { color: var(--accent); margin-bottom: 10px; }
-        .choice-card .card-title { font-weight: 700; margin-top: 5px; }
-        .choice-card .card-desc { font-size: 0.8rem; color: var(--muted); margin-top: 5px; }
-        
-        input[type="radio"] { position: absolute; opacity: 0; width: 0; height: 0; }
-        
-        .preset-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-        .btn-preset { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--muted); padding: 8px 16px; border-radius: 20px; font-size: 0.85rem; white-space: nowrap; cursor: pointer; transition: all 0.2s; }
+        /* The radio is visually hidden, so show keyboard focus on the card */
+        .choice-card:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+        .choice-card svg { color: var(--accent); margin-bottom: 8px; }
+        .choice-card .card-title { font-weight: 700; color: var(--text); }
+        .choice-card .card-desc { font-size: 0.85rem; color: var(--muted); margin-top: 4px; }
+
+        .choice-card input[type="radio"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+
+        .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+
+        .preset-row { display: flex; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }
+        .btn-preset { background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: #cbd5e1; padding: 8px 16px; border-radius: 20px; font-size: 0.85rem; white-space: nowrap; cursor: pointer; transition: all 0.2s; }
         .btn-preset:hover { background: rgba(255,255,255,0.1); color: white; }
         .btn-preset.active { background: var(--accent); border-color: var(--accent); color: white; }
 
         .info-alert { background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px; padding: 15px 20px; margin-bottom: 20px; display: flex; gap: 12px; align-items: flex-start; }
-        .info-alert i { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
-        .info-alert strong { display: block; margin-bottom: 5px; }
+        .info-alert svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+        .info-alert strong { display: block; margin-bottom: 4px; }
+        .info-alert .alert-text { color: #cbd5e1; font-size: 0.9rem; }
+        .info-alert.warning { background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.35); }
+        .info-alert.warning svg { color: var(--warning); }
+        .info-alert.danger { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.4); }
+        .info-alert.danger svg { color: var(--danger); }
+
+        .booked-list { list-style: none; padding: 0; margin: 8px 0 0; }
+        .booked-list li { font-size: 0.9rem; color: #cbd5e1; padding: 2px 0; }
+        .booked-list .tag { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; padding: 1px 7px; border-radius: 999px; margin-left: 6px; }
+        .booked-list .tag.approved { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+        .booked-list .tag.pending { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 
         .upload-zone {
             border: 2px dashed var(--border);
@@ -121,18 +155,23 @@
             transition: all 0.2s;
             background: rgba(255,255,255,0.02);
         }
-        .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); }
-        .upload-zone i { color: var(--muted); margin-bottom: 10px; }
-        .upload-zone p { margin: 5px 0 0; font-size: 0.9rem; color: var(--muted); }
-        .upload-zone small { color: var(--muted); opacity: 0.7; }
+        .upload-zone:hover, .upload-zone:focus-visible, .upload-zone.dragover { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); outline: none; }
+        .upload-zone svg { color: var(--muted); margin-bottom: 10px; }
+        .upload-zone p { margin: 5px 0 0; font-size: 0.95rem; color: #cbd5e1; }
+        .upload-zone small { color: var(--muted); }
 
-        .upload-preview { display: none; align-items: center; gap: 15px; background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px; padding: 15px 20px; }
-        .upload-preview .file-info { flex: 1; }
-        .upload-preview .file-name { font-weight: 600; }
+        .upload-preview { display: none; align-items: center; gap: 15px; background: rgba(37, 99, 235, 0.1); border: 1px solid rgba(37, 99, 235, 0.3); border-radius: 12px; padding: 15px 20px; text-align: left; }
+        .upload-preview .file-info { flex: 1; min-width: 0; }
+        .upload-preview .file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .upload-preview .file-size { font-size: 0.85rem; color: var(--muted); }
+        .btn-remove { background: none; border: none; color: var(--muted); cursor: pointer; padding: 6px; border-radius: 8px; }
+        .btn-remove:hover { color: white; background: rgba(255,255,255,0.08); }
+
+        .form-error { margin: 0 40px 20px; }
 
         .footer-nav { display: flex; justify-content: space-between; padding: 20px 40px; background: rgba(0,0,0,0.1); border-top: 1px solid var(--border); }
         .btn-nav { padding: 12px 30px; border-radius: 12px; font-weight: 700; border: none; transition: all 0.2s; cursor: pointer; font-size: 1rem; }
+        .btn-nav:focus-visible { outline: 2px solid white; outline-offset: 2px; }
         .btn-back { background: transparent; color: var(--muted); }
         .btn-back:hover { background: rgba(255,255,255,0.05); color: white; }
         .btn-next { background: var(--accent); color: white; box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2); }
@@ -143,30 +182,46 @@
 
         /* Review step styles */
         .review-section { background: rgba(255,255,255,0.03); border-radius: 16px; padding: 25px; border: 1px solid var(--border); }
-        .review-section h3 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 15px; }
+        .review-section + .review-section { margin-top: 20px; }
+        .review-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .review-section h3 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0; }
+        .btn-edit { background: none; border: none; color: #93c5fd; font-size: 0.85rem; font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+        .btn-edit:hover { background: rgba(147, 197, 253, 0.1); }
         .review-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .review-item label { font-size: 0.75rem; color: var(--muted); margin-bottom: 3px; }
-        .review-item div { font-weight: 600; }
+        .review-item .review-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 3px; }
+        .review-item .review-value { font-weight: 600; white-space: pre-wrap; word-break: break-word; }
         .review-item.full-width { grid-column: 1 / -1; }
 
         /* Success Modal */
-        .modal-content { background: var(--card-bg); border: 1px solid var(--border); border-radius: 20px; }
+        .modal-content { background: #1e293b; border: 1px solid var(--border); border-radius: 20px; color: var(--text); }
         .modal-header { border-bottom: 1px solid var(--border); padding: 20px 25px; }
         .modal-body { padding: 30px 25px; text-align: center; }
-        .modal-body i { color: var(--success); margin-bottom: 20px; }
+        .modal-body svg { color: var(--success); margin-bottom: 15px; }
+        .modal-body .ref { display: inline-block; font-size: 1.1rem; font-weight: 800; background: rgba(255,255,255,0.08); padding: 4px 14px; border-radius: 999px; margin: 10px 0 15px; }
         .modal-footer { border-top: 1px solid var(--border); padding: 20px 25px; justify-content: center; }
         .btn-modal { background: var(--accent); color: white; border: none; padding: 12px 30px; border-radius: 10px; font-weight: 600; }
 
         @media (max-width: 768px) {
-            .header, .form-content, .footer-nav, .progress-container { padding: 20px; }
+            body { padding: 12px; }
+            .header, .form-content, .footer-nav { padding: 20px; }
+            .progress-container { padding: 18px 20px 36px; }
+            .form-error { margin: 0 20px 20px; }
             .review-grid { grid-template-columns: 1fr; }
+            .space-grid, .option-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .choice-card { padding: 14px 10px; }
+            .btn-nav { padding: 12px 22px; }
+        }
+        @media (max-width: 420px) {
+            .time-grid { grid-template-columns: 1fr; }
+            .step-label { display: none; }
+            .progress-container { padding-bottom: 20px; }
         }
     </style>
 </head>
 <body>
-    <div class="booking-card">
+    <main class="booking-card">
         <div class="header">
-            <div class="header-icon"><i data-lucide="calendar-plus" style="width: 28px; height: 28px; color: white;"></i></div>
+            <div class="header-icon" aria-hidden="true"><i data-lucide="calendar-plus" style="width: 28px; height: 28px; color: white;"></i></div>
             <div>
                 <h1>Book an Event</h1>
                 <p>Rotman AV Services</p>
@@ -174,28 +229,29 @@
         </div>
 
         <div class="progress-container">
-            <div class="step-indicators">
-                <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
-                <div class="step-node active" data-step="1"><span style="display:none">1</span></div>
-                <div class="step-node" data-step="2"><span style="display:none">2</span></div>
-                <div class="step-node" data-step="3"><span style="display:none">3</span></div>
-                <div class="step-node" data-step="4"><span style="display:none">4</span></div>
-            </div>
+            <ol class="step-indicators" aria-label="Booking steps">
+                <li class="progress-fill" id="progress-fill" style="width: 0%" aria-hidden="true"></li>
+                <li class="step-node active" data-step="1"><span class="step-num">1</span><span class="step-label">Event</span></li>
+                <li class="step-node" data-step="2"><span class="step-num">2</span><span class="step-label">Timing</span></li>
+                <li class="step-node" data-step="3"><span class="step-num">3</span><span class="step-label">Services</span></li>
+                <li class="step-node" data-step="4"><span class="step-num">4</span><span class="step-label">Review</span></li>
+            </ol>
         </div>
 
-        <form id="booking-form" enctype="multipart/form-data">
+        <form id="booking-form" class="form-content" enctype="multipart/form-data" novalidate>
             <!-- Step 1: Event Info -->
-            <div class="form-step active" data-step="1">
-                <h2 style="font-weight: 800; margin: 0 0 20px;">Event Information</h2>
-                
-                <div class="field-group">
-                    <label>Event Name *</label>
-                    <input type="text" name="event-name" id="event-name" placeholder="e.g., Dean's Welcome Reception" required>
-                </div>
+            <section class="form-step active" data-step="1" aria-labelledby="step1-title">
+                <h2 id="step1-title">Event Information</h2>
 
                 <div class="field-group">
-                    <label>Select Space *</label>
-                    <div class="space-grid">
+                    <label class="field-label" for="event-name">Event Name *</label>
+                    <input type="text" name="event-name" id="event-name" placeholder="e.g., Dean's Welcome Reception" maxlength="200" required>
+                    <div class="field-error" data-error-for="event-name">Please enter the event name.</div>
+                </div>
+
+                <fieldset class="field-group">
+                    <legend class="field-label">Select Space *</legend>
+                    <div class="space-grid choice-grid" id="space-grid">
                         <label class="choice-card">
                             <input type="radio" name="event-space" value="full" required>
                             <i data-lucide="maximize"></i>
@@ -216,87 +272,100 @@
                         </label>
                         <label class="choice-card">
                             <input type="radio" name="event-space" value="fleck-atrium">
-                            <i data-lucide="home"></i>
+                            <i data-lucide="house"></i>
                             <div class="card-title">Fleck Atrium</div>
                             <div class="card-desc">Standing reception style</div>
                         </label>
                     </div>
-                </div>
+                    <div class="field-error" data-error-for="event-space">Please choose a space.</div>
+                </fieldset>
 
                 <div class="row g-3">
                     <div class="col-md-6 field-group">
-                        <label>Event Date *</label>
+                        <label class="field-label" for="event-date">Event Date *</label>
                         <input type="text" name="event-date" id="event-date" placeholder="Select date..." required>
+                        <div class="field-error" data-error-for="event-date">Please pick a date.</div>
                     </div>
                     <div class="col-md-6 field-group">
-                        <label>Your Name *</label>
-                        <input type="text" name="person-of-contact" id="person-of-contact" placeholder="Full Name" required>
+                        <label class="field-label" for="person-of-contact">Your Name *</label>
+                        <input type="text" name="person-of-contact" id="person-of-contact" placeholder="Full Name" autocomplete="name" maxlength="200" required>
+                        <div class="field-error" data-error-for="person-of-contact">Please enter your name.</div>
                     </div>
                 </div>
 
                 <div class="field-group">
-                    <label>Email Address *</label>
-                    <input type="email" name="email-address" id="email-address" placeholder="your.name@utoronto.ca" required>
+                    <label class="field-label" for="email-address">Email Address *</label>
+                    <input type="email" name="email-address" id="email-address" placeholder="your.name@utoronto.ca" autocomplete="email" required>
+                    <div class="field-hint">We'll send your confirmation here.</div>
+                    <div class="field-error" data-error-for="email-address">Please enter a valid email address.</div>
                 </div>
-            </div>
+            </section>
 
             <!-- Step 2: Timing -->
-            <div class="form-step" data-step="2">
-                <h2 style="font-weight: 800; margin: 0 0 10px;">Event Timing</h2>
-                <p style="color: var(--muted); margin-bottom: 25px;">All times should be in sequential order.</p>
+            <section class="form-step" data-step="2" aria-labelledby="step2-title">
+                <h2 id="step2-title">Event Timing</h2>
+                <p class="step-intro">Times must be in order: registration, start, end, then shutdown.</p>
 
-                <div class="info-alert">
-                    <i data-lucide="info" style="width: 20px; height: 20px;"></i>
+                <div class="info-alert" id="availability" hidden>
+                    <i data-lucide="calendar-clock" style="width: 20px; height: 20px;"></i>
                     <div>
-                        <strong>Time Presets Available</strong>
-                        Click a preset below to auto-fill recommended times.
+                        <strong id="availability-title"></strong>
+                        <ul class="booked-list" id="booked-list"></ul>
                     </div>
                 </div>
 
-                <div class="preset-row" style="margin-top: 20px;">
-                    <button type="button" class="btn-preset" data-preset="morning">🌅 Morning (8:30-12:00)</button>
-                    <button type="button" class="btn-preset" data-preset="afternoon">☀️ Afternoon (12:30-17:00)</button>
-                    <button type="button" class="btn-preset" data-preset="evening">🌙 Evening (17:30-21:00)</button>
-                    <button type="button" class="btn-preset" data-preset="fullday">📅 Full Day (8:30-17:00)</button>
+                <div class="field-label" id="presets-label">Quick fill</div>
+                <div class="preset-row" role="group" aria-labelledby="presets-label">
+                    <button type="button" class="btn-preset" data-preset="morning">🌅 Morning (8:30–12:00)</button>
+                    <button type="button" class="btn-preset" data-preset="afternoon">☀️ Afternoon (12:30–17:00)</button>
+                    <button type="button" class="btn-preset" data-preset="evening">🌙 Evening (17:30–21:00)</button>
+                    <button type="button" class="btn-preset" data-preset="fullday">📅 Full Day (8:30–17:00)</button>
                 </div>
 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="time-grid">
                     <div class="field-group">
-                        <label>Registration Opens *</label>
+                        <label class="field-label" for="registration-time">Registration Opens *</label>
                         <input type="time" name="registration-time" id="registration-time" required>
                     </div>
                     <div class="field-group">
-                        <label>Event Start *</label>
+                        <label class="field-label" for="event-start-time">Event Start *</label>
                         <input type="time" name="event-start-time" id="event-start-time" required>
                     </div>
                     <div class="field-group">
-                        <label>Presentation End *</label>
+                        <label class="field-label" for="presentation-end-time">Presentation End *</label>
                         <input type="time" name="presentation-end-time" id="presentation-end-time" required>
                     </div>
                     <div class="field-group">
-                        <label>Shutdown Complete *</label>
+                        <label class="field-label" for="shutdown">Shutdown Complete *</label>
                         <input type="time" name="shutdown" id="shutdown" required>
                     </div>
                 </div>
+                <div class="field-error" id="time-error" role="alert"></div>
 
-                <div class="info-alert" id="budget-alert" style="display: none;">
-                    <i data-lucide="alert-triangle" style="width: 20px; height: 20px; color: #f59e0b;"></i>
+                <div class="info-alert warning" id="clash-warning" hidden>
+                    <i data-lucide="triangle-alert" style="width: 20px; height: 20px;"></i>
                     <div>
-                        <strong>Budget Numbers Required</strong>
-                        <span style="color: var(--muted); font-size: 0.9rem;">
-                            Your event is scheduled outside regular hours. Please provide CC or CFC budget numbers in the next step.
-                        </span>
+                        <strong>Someone else has asked for this time</strong>
+                        <span class="alert-text">You can still send your request - the AV team will sort out which one goes ahead.</span>
                     </div>
                 </div>
-            </div>
+
+                <div class="info-alert warning" id="budget-alert" hidden>
+                    <i data-lucide="triangle-alert" style="width: 20px; height: 20px;"></i>
+                    <div>
+                        <strong>Budget number needed</strong>
+                        <span class="alert-text">Your event runs outside regular AV hours (Mon–Thu 7am–8pm, Fri 7am–6pm, weekends 8am–5pm). You'll need a CC# or CFC# on the next step.</span>
+                    </div>
+                </div>
+            </section>
 
             <!-- Step 3: Services & Extras -->
-            <div class="form-step" data-step="3">
-                <h2 style="font-weight: 800; margin: 0 0 20px;">Services & Extras</h2>
-                
-                <div class="field-group">
-                    <label>Recording Option *</label>
-                    <div class="option-grid">
+            <section class="form-step" data-step="3" aria-labelledby="step3-title">
+                <h2 id="step3-title">Services &amp; Extras</h2>
+
+                <fieldset class="field-group">
+                    <legend class="field-label">Recording Option *</legend>
+                    <div class="option-grid choice-grid" id="recording-grid">
                         <label class="choice-card">
                             <input type="radio" name="recording-option" value="none" required>
                             <i data-lucide="user"></i>
@@ -316,32 +385,34 @@
                             <div class="card-desc">Multi-cam + streaming</div>
                         </label>
                     </div>
-                </div>
+                    <div class="field-error" data-error-for="recording-option">Please choose a recording option.</div>
+                </fieldset>
 
                 <div class="row g-3">
                     <div class="col-md-6 field-group">
-                        <label>CC# (Cost Center)</label>
-                        <input type="text" name="cc-number" id="cc-number" placeholder="e.g., 12345-6789">
+                        <label class="field-label" for="cc-number">CC# (Cost Center) <span id="budget-required-mark" hidden>*</span></label>
+                        <input type="text" name="cc-number" id="cc-number" placeholder="e.g., 12345-6789" maxlength="100">
                     </div>
                     <div class="col-md-6 field-group">
-                        <label>CFC# (Cost Fetch Code)</label>
-                        <input type="text" name="cfc-number" id="cfc-number" placeholder="e.g., 98765-4321">
+                        <label class="field-label" for="cfc-number">CFC# (Cost Fetch Code) <span id="budget-required-mark-2" hidden>*</span></label>
+                        <input type="text" name="cfc-number" id="cfc-number" placeholder="e.g., 98765-4321" maxlength="100">
                     </div>
                 </div>
+                <div class="field-error" id="budget-error" role="alert" style="margin: -15px 0 20px;">Your event is outside regular AV hours, so please add a CC# or CFC#.</div>
 
                 <div class="field-group">
-                    <label>Additional Notes</label>
-                    <textarea name="other-notes" id="other-notes" rows="4" placeholder="Any special requirements, accessibility needs, or setup instructions..."></textarea>
+                    <label class="field-label" for="other-notes">Additional Notes</label>
+                    <textarea name="other-notes" id="other-notes" rows="4" maxlength="5000" placeholder="Any special requirements, accessibility needs, or setup instructions..."></textarea>
                 </div>
 
                 <div class="field-group">
-                    <label>Attach Media (optional)</label>
-                    <div class="upload-zone" id="upload-zone">
-                        <input type="file" name="media-upload" id="media-upload" accept="image/*,video/*" style="display: none;">
+                    <div class="field-label" id="upload-label">Attach Media (optional)</div>
+                    <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-labelledby="upload-label upload-help">
+                        <input type="file" name="media-upload" id="media-upload" accept=".jpg,.jpeg,.png,.gif,.mp4,.mov,.avi,.webm" hidden>
                         <div class="upload-content">
-                            <i data-lucide="upload-cloud" style="width: 40px; height: 40px;"></i>
-                            <p>Drag & drop or click to upload</p>
-                            <small>Images (JPEG, PNG, GIF) or videos (MP4, MOV) up to 50MB</small>
+                            <i data-lucide="cloud-upload" style="width: 40px; height: 40px;"></i>
+                            <p>Drag &amp; drop or click to upload</p>
+                            <small id="upload-help">Images (JPG, PNG, GIF) or videos (MP4, MOV, AVI, WEBM) up to 50MB</small>
                         </div>
                         <div class="upload-preview" id="upload-preview">
                             <i data-lucide="file" style="width: 24px; height: 24px;"></i>
@@ -349,68 +420,86 @@
                                 <div class="file-name" id="preview-name"></div>
                                 <div class="file-size">Ready to upload</div>
                             </div>
-                            <button type="button" id="remove-file" style="background: none; border: none; color: var(--muted); cursor: pointer;">
+                            <button type="button" id="remove-file" class="btn-remove" aria-label="Remove file">
                                 <i data-lucide="x" style="width: 20px; height: 20px;"></i>
                             </button>
                         </div>
                     </div>
+                    <div class="field-error" id="upload-error" role="alert"></div>
                 </div>
-            </div>
+            </section>
 
             <!-- Step 4: Review -->
-            <div class="form-step" data-step="4">
-                <h2 style="font-weight: 800; margin: 0 0 20px;">Review Your Booking</h2>
-                
+            <section class="form-step" data-step="4" aria-labelledby="step4-title">
+                <h2 id="step4-title">Review Your Booking</h2>
+
                 <div class="review-section">
-                    <h3>Event Details</h3>
+                    <div class="review-section-head"><h3>Event Details</h3><button type="button" class="btn-edit" data-goto="1">Edit</button></div>
                     <div class="review-grid">
                         <div class="review-item full-width">
-                            <label>Event Name</label>
-                            <div id="review-event-name">-</div>
+                            <div class="review-label">Event Name</div>
+                            <div class="review-value" id="review-event-name">-</div>
                         </div>
                         <div class="review-item">
-                            <label>Space</label>
-                            <div id="review-event-space">-</div>
+                            <div class="review-label">Space</div>
+                            <div class="review-value" id="review-event-space">-</div>
                         </div>
                         <div class="review-item">
-                            <label>Date</label>
-                            <div id="review-event-date">-</div>
+                            <div class="review-label">Date</div>
+                            <div class="review-value" id="review-event-date">-</div>
                         </div>
                         <div class="review-item full-width">
-                            <label>Contact</label>
-                            <div id="review-contact">-</div>
+                            <div class="review-label">Contact</div>
+                            <div class="review-value" id="review-contact">-</div>
                         </div>
                     </div>
                 </div>
 
-                <div class="review-section" style="margin-top: 20px;">
-                    <h3>Schedule</h3>
+                <div class="review-section">
+                    <div class="review-section-head"><h3>Schedule</h3><button type="button" class="btn-edit" data-goto="2">Edit</button></div>
                     <div class="review-grid">
                         <div class="review-item">
-                            <label>Registration</label>
-                            <div id="review-registration">-</div>
+                            <div class="review-label">Registration</div>
+                            <div class="review-value" id="review-registration">-</div>
                         </div>
                         <div class="review-item">
-                            <label>Start</label>
-                            <div id="review-start">-</div>
+                            <div class="review-label">Start</div>
+                            <div class="review-value" id="review-start">-</div>
                         </div>
                         <div class="review-item">
-                            <label>End</label>
-                            <div id="review-end">-</div>
+                            <div class="review-label">End</div>
+                            <div class="review-value" id="review-end">-</div>
                         </div>
                         <div class="review-item">
-                            <label>Shutdown</label>
-                            <div id="review-shutdown">-</div>
+                            <div class="review-label">Shutdown</div>
+                            <div class="review-value" id="review-shutdown">-</div>
                         </div>
                     </div>
                 </div>
 
-                <div class="review-section" style="margin-top: 20px;">
-                    <h3>Services</h3>
-                    <div id="review-recording">-</div>
-                    <div id="review-notes-section" style="margin-top: 15px; display: none;">
-                        <label style="font-size: 0.75rem; color: var(--muted);">Notes</label>
-                        <div id="review-notes">-</div>
+                <div class="review-section">
+                    <div class="review-section-head"><h3>Services</h3><button type="button" class="btn-edit" data-goto="3">Edit</button></div>
+                    <div class="review-grid">
+                        <div class="review-item full-width">
+                            <div class="review-label">Recording</div>
+                            <div class="review-value" id="review-recording">-</div>
+                        </div>
+                        <div class="review-item" id="review-cc-item" hidden>
+                            <div class="review-label">CC#</div>
+                            <div class="review-value" id="review-cc">-</div>
+                        </div>
+                        <div class="review-item" id="review-cfc-item" hidden>
+                            <div class="review-label">CFC#</div>
+                            <div class="review-value" id="review-cfc">-</div>
+                        </div>
+                        <div class="review-item full-width" id="review-notes-item" hidden>
+                            <div class="review-label">Notes</div>
+                            <div class="review-value" id="review-notes">-</div>
+                        </div>
+                        <div class="review-item full-width" id="review-file-item" hidden>
+                            <div class="review-label">Attachment</div>
+                            <div class="review-value" id="review-file">-</div>
+                        </div>
                     </div>
                 </div>
 
@@ -418,58 +507,124 @@
                     <i data-lucide="send" style="width: 20px; height: 20px; color: var(--success);"></i>
                     <div>
                         <strong>Ready to submit?</strong>
-                        <span style="color: var(--muted); font-size: 0.9rem;">Click "Submit Booking" below and we'll review your request shortly.</span>
+                        <span class="alert-text">This sends a request to the AV team. It isn't confirmed until they approve it - you'll get an email either way.</span>
                     </div>
                 </div>
-            </div>
+            </section>
         </form>
+
+        <div class="form-error info-alert danger" id="form-error" role="alert" hidden>
+            <i data-lucide="circle-alert" style="width: 20px; height: 20px;"></i>
+            <div>
+                <strong>Couldn't send your request</strong>
+                <span class="alert-text" id="form-error-text"></span>
+            </div>
+        </div>
 
         <div class="footer-nav">
             <button type="button" class="btn-nav btn-back" id="btn-back" style="visibility: hidden;">← Back</button>
             <button type="button" class="btn-nav btn-next" id="btn-next">Next Step →</button>
             <button type="button" class="btn-nav btn-submit" id="btn-submit" style="display: none;">Submit Booking</button>
         </div>
-    </div>
+    </main>
 
     <!-- Success Modal -->
-    <div class="modal fade" id="success-modal" tabindex="-1">
+    <div class="modal fade" id="success-modal" tabindex="-1" aria-labelledby="success-title" aria-hidden="true" data-bs-backdrop="static">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title" style="font-weight: 700;">Booking Submitted!</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    <h5 class="modal-title" id="success-title" style="font-weight: 700;">Request Sent</h5>
                 </div>
                 <div class="modal-body">
-                    <i data-lucide="check-circle" style="width: 80px; height: 80px;"></i>
-                    <h4 style="margin-top: 20px; font-weight: 700;">Thank You!</h4>
-                    <p style="color: var(--muted);">Your booking request has been submitted successfully. We'll be in touch shortly to confirm the details.</p>
+                    <i data-lucide="circle-check" style="width: 72px; height: 72px;"></i>
+                    <h4 style="font-weight: 700; margin: 0;">Thank you!</h4>
+                    <div class="ref" id="success-ref"></div>
+                    <p style="color: #cbd5e1; margin: 0;" id="success-text"></p>
+                    <p style="color: var(--muted); margin: 12px 0 0; font-size: 0.9rem;">Your booking isn't confirmed yet. You'll get another email once the AV team reviews it.</p>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn-modal" data-bs-dismiss="modal" onclick="window.location.reload()">Submit Another</button>
+                    <button type="button" class="btn-modal" onclick="window.location.reload()">Book Another Event</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
     <script>
         // State
         let currentStep = 1;
         const totalSteps = 4;
+        const MAX_UPLOAD = 50 * 1024 * 1024;
+        const $ = (id) => document.getElementById(id);
+
+        const spaceMap = {
+            'full': 'Event Hall Full',
+            'one-third': 'Event Hall 1/3',
+            'two-thirds': 'Event Hall 2/3',
+            'fleck-atrium': 'Fleck Atrium'
+        };
+        const recordingMap = {
+            'none': 'Technician Only',
+            'basic-recording': 'Basic Recording',
+            'live-web-recording': 'Live Web Recording'
+        };
 
         // Initialize Lucide icons
         lucide.createIcons();
 
         // Initialize Flatpickr for date
-        flatpickr('#event-date', {
+        const datePicker = flatpickr('#event-date', {
             minDate: 'today',
             maxDate: new Date().fp_incr(365),
             dateFormat: 'F j, Y',
-            disableMobile: true
+            disableMobile: true,
+            onChange: () => { clearError('event-date'); loadAvailability(); checkBudgetRequired(); }
         });
 
-        // Time presets
+        const checkedValue = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value || '';
+        const times = () => ({
+            registration: $('registration-time').value,
+            start: $('event-start-time').value,
+            end: $('presentation-end-time').value,
+            shutdown: $('shutdown').value
+        });
+
+        function formatTime(time24) {
+            if (!time24) return '-';
+            const [hours, minutes] = time24.split(':');
+            const h = parseInt(hours, 10);
+            return `${h % 12 || 12}:${minutes} ${h >= 12 ? 'PM' : 'AM'}`;
+        }
+
+        // ---- Field errors -------------------------------------------------
+        function showError(name, message) {
+            const el = document.querySelector(`[data-error-for="${name}"]`);
+            if (el) {
+                if (message) el.textContent = message;
+                el.classList.add('show');
+            }
+            const field = $(name);
+            if (field) field.classList.add('is-invalid');
+            const grid = name === 'event-space' ? $('space-grid') : name === 'recording-option' ? $('recording-grid') : null;
+            if (grid) {
+                grid.classList.add('is-invalid');
+                grid.classList.add('shake');
+                setTimeout(() => grid.classList.remove('shake'), 500);
+            }
+        }
+
+        function clearError(name) {
+            document.querySelector(`[data-error-for="${name}"]`)?.classList.remove('show');
+            $(name)?.classList.remove('is-invalid');
+            if (name === 'event-space') $('space-grid').classList.remove('is-invalid');
+            if (name === 'recording-option') $('recording-grid').classList.remove('is-invalid');
+        }
+
+        ['event-name', 'person-of-contact', 'email-address'].forEach(id =>
+            $(id).addEventListener('input', () => clearError(id)));
+
+        // ---- Time presets ---------------------------------------------------
         const presets = {
             morning: { registration: '08:30', start: '09:00', end: '11:30', shutdown: '12:00' },
             afternoon: { registration: '12:30', start: '13:00', end: '16:30', shutdown: '17:00' },
@@ -477,55 +632,163 @@
             fullday: { registration: '08:30', start: '09:00', end: '16:30', shutdown: '17:00' }
         };
 
-        // Preset buttons
         document.querySelectorAll('.btn-preset').forEach(btn => {
             btn.addEventListener('click', () => {
                 const preset = presets[btn.dataset.preset];
-                if (preset) {
-                    document.getElementById('registration-time').value = preset.registration;
-                    document.getElementById('event-start-time').value = preset.start;
-                    document.getElementById('presentation-end-time').value = preset.end;
-                    document.getElementById('shutdown').value = preset.shutdown;
-                    
-                    document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    
-                    checkBudgetRequired();
-                }
+                if (!preset) return;
+                $('registration-time').value = preset.registration;
+                $('event-start-time').value = preset.start;
+                $('presentation-end-time').value = preset.end;
+                $('shutdown').value = preset.shutdown;
+                document.querySelectorAll('.btn-preset').forEach(b => b.classList.toggle('active', b === btn));
+                onTimesChanged();
             });
         });
 
-        // Choice cards - update selected state
+        document.querySelectorAll('input[type="time"]').forEach(input => {
+            input.addEventListener('change', () => {
+                document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
+                onTimesChanged();
+            });
+        });
+
+        function onTimesChanged() {
+            document.querySelectorAll('input[type="time"]').forEach(i => i.classList.remove('is-invalid'));
+            $('time-error').classList.remove('show');
+            checkBudgetRequired();
+            checkClash();
+        }
+
+        // ---- Choice cards ---------------------------------------------------
         document.querySelectorAll('.choice-card input[type="radio"]').forEach(radio => {
             radio.addEventListener('change', () => {
-                const name = radio.name;
-                document.querySelectorAll(`input[name="${name}"]`).forEach(r => {
+                document.querySelectorAll(`input[name="${radio.name}"]`).forEach(r => {
                     r.closest('.choice-card').classList.toggle('selected', r.checked);
                 });
+                clearError(radio.name);
+                if (radio.name === 'event-space') loadAvailability();
             });
         });
 
-        // File upload
-        const uploadZone = document.getElementById('upload-zone');
-        const uploadInput = document.getElementById('media-upload');
-        const previewName = document.getElementById('preview-name');
-        const removeFile = document.getElementById('remove-file');
+        // ---- Availability ---------------------------------------------------
+        // Bookings that already hold the chosen space on the chosen day.
+        let takenSlots = [];
 
-        uploadZone.addEventListener('click', () => uploadInput.click());
-        uploadInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                const file = e.target.files[0];
-                previewName.textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`;
-                document.querySelector('.upload-content').style.display = 'none';
-                document.getElementById('upload-preview').style.display = 'flex';
+        async function loadAvailability() {
+            takenSlots = [];
+            const date = datePicker.selectedDates[0];
+            const space = checkedValue('event-space');
+            if (!date || !space) { renderAvailability(); return; }
+            try {
+                const iso = flatpickr.formatDate(date, 'Y-m-d');
+                const res = await fetch(`api/availability?date=${iso}&space=${encodeURIComponent(space)}`);
+                if (res.ok) takenSlots = (await res.json()).bookings;
+            } catch { /* availability is a hint only - the server checks again on submit */ }
+            renderAvailability();
+            checkClash();
+        }
+
+        function renderAvailability() {
+            const box = $('availability');
+            if (!takenSlots.length) { box.hidden = true; return; }
+            $('availability-title').textContent = `Already booked on ${$('event-date').value}`;
+            const list = $('booked-list');
+            list.replaceChildren(...takenSlots.map(s => {
+                const li = document.createElement('li');
+                li.textContent = `${s.spaceName}: ${formatTime(s.from)} – ${formatTime(s.to)}`;
+                const tag = document.createElement('span');
+                tag.className = `tag ${s.status}`;
+                tag.textContent = s.status === 'approved' ? 'Confirmed' : 'Requested';
+                li.appendChild(tag);
+                return li;
+            }));
+            box.hidden = false;
+        }
+
+        // Overlapping slots for the times entered so far.
+        function clashes() {
+            const t = times();
+            if (!t.registration || !t.shutdown || t.registration >= t.shutdown) return [];
+            return takenSlots.filter(s => t.registration < s.to && s.from < t.shutdown);
+        }
+
+        function checkClash() {
+            const c = clashes();
+            const confirmed = c.filter(s => s.status === 'approved');
+            $('clash-warning').hidden = !(c.length && !confirmed.length);
+            if (confirmed.length) {
+                const s = confirmed[0];
+                $('time-error').textContent = `${s.spaceName} is already confirmed from ${formatTime(s.from)} to ${formatTime(s.to)}. Please pick another time or space.`;
+                $('time-error').classList.add('show');
             }
-        });
+            return confirmed.length === 0;
+        }
 
-        removeFile.addEventListener('click', (e) => {
-            e.stopPropagation();
+        // ---- Budget rule ----------------------------------------------------
+        // Regular AV hours; outside them a budget number is needed.
+        const HOURS = {
+            0: { start: '08:00', end: '17:00' }, // Sunday
+            6: { start: '08:00', end: '17:00' }, // Saturday
+            5: { start: '07:00', end: '18:00' }, // Friday
+        };
+
+        function budgetRequired() {
+            const date = datePicker.selectedDates[0];
+            const t = times();
+            if (!date || !t.registration || !t.shutdown) return false;
+            const limit = HOURS[date.getDay()] || { start: '07:00', end: '20:00' };
+            return t.registration < limit.start || t.shutdown > limit.end;
+        }
+
+        function checkBudgetRequired() {
+            const needed = budgetRequired();
+            $('budget-alert').hidden = !needed;
+            $('budget-required-mark').hidden = !needed;
+            $('budget-required-mark-2').hidden = !needed;
+            if (!needed) $('budget-error').classList.remove('show');
+        }
+
+        ['cc-number', 'cfc-number'].forEach(id => $(id).addEventListener('input', () => {
+            $('budget-error').classList.remove('show');
+            $('cc-number').classList.remove('is-invalid');
+            $('cfc-number').classList.remove('is-invalid');
+        }));
+
+        // ---- File upload ----------------------------------------------------
+        const uploadZone = $('upload-zone');
+        const uploadInput = $('media-upload');
+        const ALLOWED_FILE = /\.(jpe?g|png|gif|mp4|mov|avi|webm)$/i;
+
+        function resetUpload() {
             uploadInput.value = '';
             document.querySelector('.upload-content').style.display = 'block';
-            document.getElementById('upload-preview').style.display = 'none';
+            $('upload-preview').style.display = 'none';
+        }
+
+        uploadZone.addEventListener('click', () => uploadInput.click());
+        uploadZone.addEventListener('keydown', (e) => {
+            if (e.target === uploadZone && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); uploadInput.click(); }
+        });
+        uploadInput.addEventListener('change', () => {
+            const file = uploadInput.files[0];
+            $('upload-error').classList.remove('show');
+            if (!file) return;
+            if (!ALLOWED_FILE.test(file.name) || file.size > MAX_UPLOAD) {
+                $('upload-error').textContent = file.size > MAX_UPLOAD
+                    ? `That file is ${(file.size / (1024 * 1024)).toFixed(0)}MB - the limit is 50MB.`
+                    : 'Only JPG, PNG, GIF, MP4, MOV, AVI or WEBM files can be uploaded.';
+                $('upload-error').classList.add('show');
+                resetUpload();
+                return;
+            }
+            $('preview-name').textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`;
+            document.querySelector('.upload-content').style.display = 'none';
+            $('upload-preview').style.display = 'flex';
+        });
+
+        $('remove-file').addEventListener('click', (e) => {
+            e.stopPropagation();
+            resetUpload();
         });
 
         uploadZone.addEventListener('dragover', (e) => {
@@ -542,182 +805,183 @@
             }
         });
 
-        // Validate current step
+        // ---- Step validation ------------------------------------------------
+        const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
         function validateStep(step) {
-            const stepEl = document.querySelector(`.form-step[data-step="${step}"]`);
-            const requiredFields = stepEl.querySelectorAll('[required]');
-            let isValid = true;
+            let firstInvalid = null;
+            const fail = (name, message) => { showError(name, message); firstInvalid = firstInvalid || name; };
 
-            requiredFields.forEach(field => {
-                field.classList.remove('is-invalid');
-                
-                if (field.type === 'radio') {
-                    const name = field.name;
-                    const checked = stepEl.querySelector(`input[name="${name}"]:checked`);
-                    if (!checked) {
-                        isValid = false;
-                        const container = field.closest('.space-grid, .option-grid');
-                        if (container) {
-                            container.style.animation = 'shake 0.5s ease';
-                            setTimeout(() => container.style.animation = '', 500);
-                        }
-                    }
-                } else if (!field.value.trim()) {
-                    isValid = false;
-                    field.classList.add('is-invalid');
+            if (step === 1) {
+                if (!$('event-name').value.trim()) fail('event-name');
+                if (!checkedValue('event-space')) fail('event-space');
+                if (!datePicker.selectedDates.length) fail('event-date');
+                if (!$('person-of-contact').value.trim()) fail('person-of-contact');
+                const email = $('email-address').value.trim();
+                if (!email) fail('email-address', 'Please enter your email address.');
+                else if (!EMAIL.test(email)) fail('email-address', 'That email address doesn\'t look right.');
+            }
+
+            if (step === 2) {
+                const t = times();
+                const ids = { registration: 'registration-time', start: 'event-start-time', end: 'presentation-end-time', shutdown: 'shutdown' };
+                const missing = Object.keys(ids).filter(k => !t[k]);
+                let message = '';
+                if (missing.length) {
+                    missing.forEach(k => $(ids[k]).classList.add('is-invalid'));
+                    message = 'Please fill in all four times, or pick a quick-fill option.';
+                } else if (t.registration > t.start) {
+                    $(ids.registration).classList.add('is-invalid');
+                    message = 'Registration must open at or before the event starts.';
+                } else if (t.start > t.end) {
+                    $(ids.end).classList.add('is-invalid');
+                    message = 'The presentation must end after the event starts.';
+                } else if (t.end > t.shutdown) {
+                    $(ids.shutdown).classList.add('is-invalid');
+                    message = 'Shutdown must be at or after the presentation ends.';
+                } else if (t.registration === t.shutdown) {
+                    $(ids.shutdown).classList.add('is-invalid');
+                    message = 'Shutdown must be after registration opens.';
                 }
-            });
+                if (message) {
+                    $('time-error').textContent = message;
+                    $('time-error').classList.add('show');
+                    firstInvalid = 'time';
+                } else if (!checkClash()) {
+                    firstInvalid = 'time';
+                }
+            }
 
-            return isValid;
+            if (step === 3) {
+                if (!checkedValue('recording-option')) fail('recording-option');
+                if (budgetRequired() && !$('cc-number').value.trim() && !$('cfc-number').value.trim()) {
+                    $('budget-error').classList.add('show');
+                    $('cc-number').classList.add('is-invalid');
+                    $('cfc-number').classList.add('is-invalid');
+                    firstInvalid = firstInvalid || 'cc-number';
+                }
+            }
+
+            if (firstInvalid) {
+                const target = firstInvalid === 'time' ? $('time-error')
+                    : $(firstInvalid) || document.querySelector(`[data-error-for="${firstInvalid}"]`);
+                target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if ($(firstInvalid) && $(firstInvalid).focus && firstInvalid !== 'event-date') $(firstInvalid).focus({ preventScroll: true });
+            }
+            return !firstInvalid;
         }
 
-        // Show step
+        // ---- Steps ------------------------------------------------------------
         function showStep(step) {
+            hideFormError();
             document.querySelectorAll('.form-step').forEach(s => s.classList.remove('active'));
-            document.querySelectorAll('.step-node').forEach((n, i) => {
-                const s = i + 1;
+            document.querySelectorAll('.step-node').forEach((n) => {
+                const s = Number(n.dataset.step);
                 n.classList.toggle('active', s === step);
                 n.classList.toggle('completed', s < step);
+                if (s === step) n.setAttribute('aria-current', 'step'); else n.removeAttribute('aria-current');
             });
 
             document.querySelector(`.form-step[data-step="${step}"]`).classList.add('active');
-            document.getElementById('progress-fill').style.width = `${((step - 1) / (totalSteps - 1)) * 100}%`;
-            document.getElementById('btn-back').style.visibility = step === 1 ? 'hidden' : 'visible';
-            document.getElementById('btn-next').style.display = step === totalSteps ? 'none' : 'block';
-            document.getElementById('btn-submit').style.display = step === totalSteps ? 'block' : 'none';
+            $('progress-fill').style.width = `calc((100% - 32px) * ${(step - 1) / (totalSteps - 1)})`;
+            $('btn-back').style.visibility = step === 1 ? 'hidden' : 'visible';
+            $('btn-next').style.display = step === totalSteps ? 'none' : 'block';
+            $('btn-submit').style.display = step === totalSteps ? 'block' : 'none';
 
             if (step === totalSteps) updateReview();
-            
+
             currentStep = step;
             window.scrollTo({ top: 0, behavior: 'smooth' });
             lucide.createIcons();
         }
 
-        // Update review
+        function setReview(id, value, itemId) {
+            $(id).textContent = value || '-';
+            if (itemId) $(itemId).hidden = !value;
+        }
+
         function updateReview() {
-            const spaceMap = {
-                'full': 'Event Hall Full',
-                'one-third': 'Event Hall 1/3',
-                'two-thirds': 'Event Hall 2/3',
-                'fleck-atrium': 'Fleck Atrium'
-            };
-            const recordingMap = {
-                'none': 'No Recording',
-                'basic-recording': 'Basic Recording',
-                'live-web-recording': 'Live Web Recording'
-            };
+            setReview('review-event-name', $('event-name').value.trim());
+            setReview('review-event-space', spaceMap[checkedValue('event-space')]);
+            setReview('review-event-date', $('event-date').value);
+            setReview('review-contact', `${$('person-of-contact').value.trim()} (${$('email-address').value.trim()})`);
 
-            document.getElementById('review-event-name').textContent = document.getElementById('event-name').value || 'Untitled Event';
-            const spaceValue = document.querySelector('input[name="event-space"]:checked')?.value || '';
-            document.getElementById('review-event-space').textContent = spaceMap[spaceValue] || spaceValue;
-            document.getElementById('review-event-date').textContent = document.getElementById('event-date').value;
-            document.getElementById('review-contact').textContent = 
-                `${document.getElementById('person-of-contact').value} (${document.getElementById('email-address').value})`;
-            
-            document.getElementById('review-registration').textContent = formatTime(document.getElementById('registration-time').value);
-            document.getElementById('review-start').textContent = formatTime(document.getElementById('event-start-time').value);
-            document.getElementById('review-end').textContent = formatTime(document.getElementById('presentation-end-time').value);
-            document.getElementById('review-shutdown').textContent = formatTime(document.getElementById('shutdown').value);
-            
-            const recordingValue = document.querySelector('input[name="recording-option"]:checked')?.value || '';
-            document.getElementById('review-recording').textContent = recordingMap[recordingValue] || recordingValue;
-            
-            const notes = document.getElementById('other-notes').value;
-            const notesSection = document.getElementById('review-notes-section');
-            if (notes.trim()) {
-                notesSection.style.display = 'block';
-                document.getElementById('review-notes').textContent = notes;
-            } else {
-                notesSection.style.display = 'none';
-            }
+            const t = times();
+            setReview('review-registration', formatTime(t.registration));
+            setReview('review-start', formatTime(t.start));
+            setReview('review-end', formatTime(t.end));
+            setReview('review-shutdown', formatTime(t.shutdown));
+
+            setReview('review-recording', recordingMap[checkedValue('recording-option')]);
+            setReview('review-cc', $('cc-number').value.trim(), 'review-cc-item');
+            setReview('review-cfc', $('cfc-number').value.trim(), 'review-cfc-item');
+            setReview('review-notes', $('other-notes').value.trim(), 'review-notes-item');
+            setReview('review-file', uploadInput.files[0]?.name, 'review-file-item');
         }
 
-        function formatTime(time24) {
-            if (!time24) return '-';
-            const [hours, minutes] = time24.split(':');
-            const h = parseInt(hours);
-            return `${h % 12 || 12}:${minutes} ${h >= 12 ? 'PM' : 'AM'}`;
-        }
-
-        // Check budget required
-        function checkBudgetRequired() {
-            const dateInput = document.getElementById('event-date');
-            const shutdownInput = document.getElementById('shutdown');
-            const registrationInput = document.getElementById('registration-time');
-            const budgetAlert = document.getElementById('budget-alert');
-
-            if (!dateInput.value || !shutdownInput.value || !registrationInput.value) {
-                budgetAlert.style.display = 'none';
-                return;
-            }
-
-            const date = new Date(dateInput.value);
-            const dayOfWeek = date.getDay();
-            const shutdown = shutdownInput.value;
-            const registration = registrationInput.value;
-
-            let needsBudget = false;
-            const limits = {
-                0: { start: '08:00', end: '17:00' }, // Sunday
-                6: { start: '08:00', end: '17:00' }, // Saturday
-                5: { start: '07:00', end: '18:00' }, // Friday
-            };
-
-            const limit = limits[dayOfWeek] || { start: '07:00', end: '20:00' };
-            if (registration < limit.start || shutdown > limit.end) {
-                needsBudget = true;
-            }
-
-            budgetAlert.style.display = needsBudget ? 'flex' : 'none';
-        }
-
-        // Time input listeners
-        document.querySelectorAll('input[type="time"]').forEach(input => {
-            input.addEventListener('change', checkBudgetRequired);
-        });
+        document.querySelectorAll('[data-goto]').forEach(btn =>
+            btn.addEventListener('click', () => showStep(Number(btn.dataset.goto))));
 
         // Navigation
-        document.getElementById('btn-next').addEventListener('click', () => {
+        $('btn-next').addEventListener('click', () => {
             if (validateStep(currentStep) && currentStep < totalSteps) {
                 showStep(currentStep + 1);
             }
         });
 
-        document.getElementById('btn-back').addEventListener('click', () => {
+        $('btn-back').addEventListener('click', () => {
             if (currentStep > 1) showStep(currentStep - 1);
         });
 
-        // Submit
-        document.getElementById('btn-submit').addEventListener('click', async () => {
-            if (!validateStep(currentStep)) return;
+        // ---- Submit -------------------------------------------------------------
+        function showFormError(message) {
+            $('form-error-text').textContent = message;
+            $('form-error').hidden = false;
+            $('form-error').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        function hideFormError() { $('form-error').hidden = true; }
 
-            const btn = document.getElementById('btn-submit');
-            btn.classList.add('loading');
+        $('btn-submit').addEventListener('click', async () => {
+            for (let s = 1; s < totalSteps; s++) {
+                if (!validateStep(s)) { showStep(s); validateStep(s); return; }
+            }
+
+            const btn = $('btn-submit');
             btn.disabled = true;
             btn.textContent = 'Submitting...';
+            hideFormError();
 
             try {
-                const form = document.getElementById('booking-form');
-                const formData = new FormData(form);
+                const formData = new FormData($('booking-form'));
+                const response = await fetch('api/submit', { method: 'POST', body: formData });
+                const result = await response.json().catch(() => ({}));
 
-                const response = await fetch('api/submit', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    const modal = new bootstrap.Modal(document.getElementById('success-modal'));
-                    modal.show();
-                } else {
-                    alert(result.message || 'Failed to submit booking. Please try again.');
+                if (response.ok && result.success) {
+                    $('success-ref').textContent = `Request #${result.id}`;
+                    $('success-text').textContent = result.confirmationSent
+                        ? `We've emailed a copy to ${$('email-address').value.trim()}.`
+                        : 'The AV team has your request. (We couldn\'t send you a copy by email.)';
+                    new bootstrap.Modal($('success-modal')).show();
+                    return;
                 }
+
+                if (response.status === 409) {
+                    // Taken while the form was open: go back to timing and show the latest bookings
+                    showStep(2);
+                    await loadAvailability();
+                    $('time-error').textContent = result.message;
+                    $('time-error').classList.add('show');
+                    return;
+                }
+                if (response.status === 401) {
+                    showFormError('Your login has expired. Please refresh the page and sign in again.');
+                    return;
+                }
+                showFormError(result.message || `Something went wrong (error ${response.status}). Please try again.`);
             } catch (error) {
                 console.error('Submission error:', error);
-                alert('Failed to submit booking. Please check your connection and try again.');
+                showFormError('We couldn\'t reach the server. Please check your connection and try again.');
             } finally {
-                btn.classList.remove('loading');
                 btn.disabled = false;
                 btn.textContent = 'Submit Booking';
             }
