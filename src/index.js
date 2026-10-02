@@ -7,6 +7,10 @@ import { bookingStore, BookingError } from './bookings.js';
 import * as mail from './mail.js';
 import { sendMail, mailStatus } from './mailer.js';
 import {
+    safeEqual, passwordMatches, emailAllowed, parseDomains,
+    loadSettings, applySettings, settingsView, saveSettings, SettingsError
+} from './settings.js';
+import {
     EVENT_SPACES, RECORDING_OPTIONS, MAX_UPLOAD_BYTES,
     validateEmail, validateTimeOrder, parseEventDate, needsBudgetNumber,
     todayInToronto, addDays, text, validUpload, safeFileName
@@ -35,20 +39,14 @@ const signInPage = () => page('Sign in needed', 'Sign in needed',
 
 // ---------------------------------------------------------------------------
 // Logins. Two levels:
-//   - AUTH_USER / AUTH_PASS: shared login for the booking form
+//   - AUTH_USER / AUTH_PASS: shared login for the booking form. Staff can
+//     replace the password on the admin page's Settings (FORM_PASS_HASH).
 //   - ADMIN_USER / ADMIN_PASS: AV staff - the admin page and uploaded files
-// There are no built-in passwords: without AUTH_PASS and ADMIN_PASS set, the
-// app refuses every request instead of running unprotected.
+// There are no built-in passwords: without both passwords set, the app
+// refuses every request instead of running unprotected.
 
-const encoder = new TextEncoder();
-
-// Constant-time comparison: hash both sides so the lengths always match.
-async function safeEqual(a, b) {
-    const [ha, hb] = await Promise.all([
-        crypto.subtle.digest('SHA-256', encoder.encode(String(a))),
-        crypto.subtle.digest('SHA-256', encoder.encode(String(b)))
-    ]);
-    return crypto.subtle.timingSafeEqual(ha, hb);
+function isSetUp(env) {
+    return Boolean(env.ADMIN_PASS && (env.AUTH_PASS || env.FORM_PASS_HASH));
 }
 
 function credentials(env) {
@@ -76,7 +74,7 @@ export async function loginRole(request, env) {
     // Check both pairs every time so timing doesn't reveal which user exists.
     const [adminUser, adminPass, formUser, formPass] = await Promise.all([
         safeEqual(user, c.adminUser), safeEqual(pass, c.adminPass),
-        safeEqual(user, c.user), safeEqual(pass, c.pass)
+        safeEqual(user, c.user), env.FORM_PASS_HASH ? passwordMatches(pass, env.FORM_PASS_HASH) : safeEqual(pass, c.pass)
     ]);
     if (adminUser && adminPass) return 'admin';
     if (formUser && formPass) return 'user';
@@ -243,6 +241,9 @@ async function submit(request, env, store) {
     };
 
     if (!validateEmail(input.contactEmail)) return fail(400, 'Please provide a valid email address');
+    if (!emailAllowed(input.contactEmail, env.ALLOWED_EMAIL_DOMAINS)) {
+        return fail(400, `Please use an email address ending in ${parseDomains(env.ALLOWED_EMAIL_DOMAINS).join(' or ')}`);
+    }
     if (!input.contactName) return fail(400, 'Please provide your name');
     if (!input.eventName) return fail(400, 'Please provide an event name');
 
@@ -345,6 +346,20 @@ async function adminSetStatus(request, env, store, id) {
     }
 }
 
+async function adminSaveSettings(request, env) {
+    if (!(request.headers.get('content-type') || '').includes('application/json')) return fail(415, 'Send JSON');
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object') return fail(400, 'Send the settings as a JSON object');
+    try {
+        await saveSettings(env.DB, body);
+    } catch (err) {
+        if (err instanceof SettingsError) return fail(400, err.message);
+        throw err;
+    }
+    console.log(`Settings changed: ${Object.keys(body).join(', ')}`);
+    return json({ success: true, settings: settingsView(applySettings(env, await loadSettings(env.DB))) });
+}
+
 async function serveUpload(env, key) {
     if (!UPLOAD_KEY.test(key)) return new Response('Not found', { status: 404 });
     const obj = await env.UPLOADS.get(key);
@@ -396,13 +411,12 @@ export async function purgeOldUploads(env, now = new Date()) {
 // ---------------------------------------------------------------------------
 // Router
 
-async function route(request, env) {
+async function route(request, baseEnv) {
     const url = new URL(request.url);
     const method = request.method;
-    mail.configureMail(env);
 
     let path = url.pathname;
-    const prefix = basePath(env);
+    const prefix = basePath(baseEnv);
     if (prefix) {
         // "/book" -> "/book/" so the pages' relative links resolve under it
         if (path === prefix) return Response.redirect(`${url.origin}${prefix}/${url.search}`, 301);
@@ -410,17 +424,20 @@ async function route(request, env) {
         path = path.slice(prefix.length);
     }
 
+    const env = applySettings(baseEnv, await loadSettings(baseEnv.DB));
+    mail.configureMail(env);
+
     // Public: lets uptime monitors check the app without a login.
     if (path === '/health') {
         return json({
             status: 'ok',
             timestamp: new Date().toISOString(),
-            configured: Boolean(env.AUTH_PASS && env.ADMIN_PASS),
+            configured: isSetUp(env),
             email: mailStatus(env)
         });
     }
 
-    if (!env.AUTH_PASS || !env.ADMIN_PASS) {
+    if (!isSetUp(env)) {
         return page('Not set up', 'Not set up yet', '<p>The AUTH_PASS and ADMIN_PASS secrets must be set before this app can be used.</p>', 503);
     }
 
@@ -449,6 +466,7 @@ async function route(request, env) {
         if (path.startsWith('/uploads/')) return requireAdmin() || serveUpload(env, decodeURIComponent(path.slice(9)));
         if (path === '/api/availability') return availability(request, env, store);
         if (path === '/api/admin/bookings') return requireAdmin() || adminList(request, env, store);
+        if (path === '/api/admin/settings') return requireAdmin() || json({ success: true, settings: settingsView(env) });
         const one = path.match(/^\/api\/admin\/bookings\/(\d+)$/);
         if (one) return requireAdmin() || adminOne(Number(one[1]), store);
     }
@@ -463,6 +481,7 @@ async function route(request, env) {
     }
     const status = path.match(/^\/api\/admin\/bookings\/(\d+)\/status$/);
     if (method === 'POST' && status) return requireAdmin() || adminSetStatus(request, env, store, Number(status[1]));
+    if (method === 'POST' && path === '/api/admin/settings') return requireAdmin() || adminSaveSettings(request, env);
 
     return path.startsWith('/api/') ? fail(404, 'Not found') : new Response('Not found', { status: 404 });
 }

@@ -10,6 +10,7 @@ Current release: **v2.0.0** — see [CHANGELOG.md](CHANGELOG.md).
 - **Spaces**: Event Hall (full, 1/3, 2/3) and Fleck Atrium. **Recording**: none, basic, live web
 - **Double-booking check**: the form shows times already taken; a clash with an approved booking is refused, a clash with a pending one is flagged to staff
 - **Admin page** (`/admin`, separate staff login): review, approve, decline, cancel, with a note to the requester
+- **Settings** on the admin page: where new requests go, which email domains may book, the daily upload limit, and the booking form password
 - **Emails** through your mail server (Titan): staff get each request with a calendar hold; requesters get a confirmation, then an approve/decline/cancel email (approved ones carry a calendar invite in Toronto time)
 - **Uploads** (images/videos up to 50MB), staff-only, deleted 90 days after the event
 - Two logins, cross-site and clickjacking protection, per-IP rate limits, a daily upload cap, budget-number rule for after-hours events
@@ -56,7 +57,16 @@ Until `AUTH_PASS` and `ADMIN_PASS` are set, every page answers "Not set up yet" 
 
 ## Settings
 
-Non-secret settings live in `wrangler.jsonc` under `vars`:
+Staff can change these on the admin page (**Settings** button). Saved values are kept in D1 and take priority over the defaults below:
+
+- **Send new requests to** (overrides `EMAIL_TO`)
+- **Requester email must end in**: e.g. `utoronto.ca`; subdomains count. Empty allows any address
+- **Daily upload limit** (overrides `UPLOAD_DAILY_LIMIT_MB`)
+- **Booking form password** (overrides `AUTH_PASS`; stored salted and hashed, never shown). "Go back to the password set in Cloudflare" removes it
+
+`ADMIN_PASS` and `SMTP_PASSWORD` can only be set in Cloudflare.
+
+Defaults live in `wrangler.jsonc` under `vars`:
 
 | Variable | Description | Default |
 |---|---|---|
@@ -87,6 +97,8 @@ GET  /api/availability?date=YYYY-MM-DD&space=full
 GET  /api/admin/bookings?scope=upcoming|past|all&status=pending      (staff)
 GET  /api/admin/bookings/:id                                          (staff)
 POST /api/admin/bookings/:id/status    JSON { "status": "approved"|"declined"|"cancelled", "note": "" } (staff)
+GET  /api/admin/settings                                              (staff)
+POST /api/admin/settings               JSON { emailTo, allowedEmailDomains, uploadDailyLimitMb, formPassword | useCloudflarePassword } (staff)
 GET  /health
 ```
 
