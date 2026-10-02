@@ -1,35 +1,18 @@
 import js from '@eslint/js';
 
+const workerGlobals = Object.fromEntries([
+    'Request', 'Response', 'Headers', 'URL', 'URLSearchParams', 'FormData', 'crypto', 'console',
+    'TextEncoder', 'TextDecoder', 'btoa', 'atob', 'ReadableStream', 'WritableStream', 'FixedLengthStream',
+    'setTimeout', 'clearTimeout', 'Intl'
+].map(name => [name, 'readonly']));
+
 export default [
     js.configs.recommended,
     {
         languageOptions: {
-            ecmaVersion: 2022,
-            sourceType: 'commonjs',
-            globals: {
-                // Node.js globals
-                require: 'readonly',
-                module: 'readonly',
-                exports: 'readonly',
-                process: 'readonly',
-                __dirname: 'readonly',
-                __filename: 'readonly',
-                console: 'readonly',
-                Buffer: 'readonly',
-                setTimeout: 'readonly',
-                setInterval: 'readonly',
-                URL: 'readonly',
-                // Browser globals
-                document: 'readonly',
-                window: 'readonly',
-                FormData: 'readonly',
-                fetch: 'readonly',
-                alert: 'readonly',
-                location: 'readonly',
-                bootstrap: 'readonly',
-                flatpickr: 'readonly',
-                lucide: 'readonly',
-            },
+            ecmaVersion: 2024,
+            sourceType: 'module',
+            globals: workerGlobals
         },
         rules: {
             'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
@@ -42,22 +25,10 @@ export default [
         },
     },
     {
-        files: ['__tests__/**/*.js'],
-        languageOptions: {
-            globals: {
-                jest: 'readonly',
-                describe: 'readonly',
-                it: 'readonly',
-                test: 'readonly',
-                expect: 'readonly',
-                beforeAll: 'readonly',
-                afterAll: 'readonly',
-                beforeEach: 'readonly',
-                afterEach: 'readonly',
-            },
-        },
+        files: ['vitest.config.js'],
+        languageOptions: { globals: { process: 'readonly' } },
     },
     {
-        ignores: ['node_modules/**', 'coverage/**', 'uploads/**', 'eslint.config.js'],
+        ignores: ['node_modules/**', 'coverage/**', '.wrangler/**', 'public/**', 'eslint.config.js'],
     },
 ];

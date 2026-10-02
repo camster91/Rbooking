@@ -772,7 +772,12 @@
         const uploadInput = $('media-upload');
         const ALLOWED_FILE = /\.(jpe?g|png|gif|mp4|mov|avi|webm)$/i;
 
+        // Key of the file already sent to storage, so a retry (for example
+        // after picking a new time) doesn't upload it again.
+        let uploadedKey = null;
+
         function resetUpload() {
+            uploadedKey = null;
             uploadInput.value = '';
             document.querySelector('.upload-content').style.display = 'block';
             $('upload-preview').style.display = 'none';
@@ -789,6 +794,7 @@
             return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
         }
         uploadInput.addEventListener('change', () => {
+            uploadedKey = null;
             const file = uploadInput.files[0];
             $('upload-error').classList.remove('show');
             if (!file) return;
@@ -971,7 +977,28 @@
             hideFormError();
 
             try {
+                // 1. Send the file (if any) straight to storage.
+                const file = uploadInput.files[0];
+                if (file && !uploadedKey) {
+                    btn.textContent = 'Uploading file...';
+                    const up = await fetch('api/uploads', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+                        body: file
+                    });
+                    const upResult = await up.json().catch(() => ({}));
+                    if (!up.ok || !upResult.success) {
+                        showFormError(upResult.message || `The file couldn't be uploaded (error ${up.status}). Please try again.`);
+                        return;
+                    }
+                    uploadedKey = upResult.uploadKey;
+                    btn.textContent = 'Submitting...';
+                }
+
+                // 2. Send the booking, pointing at the stored file.
                 const formData = new FormData($('booking-form'));
+                formData.delete('media-upload');
+                if (uploadedKey) formData.set('upload-key', uploadedKey);
                 const response = await fetch('api/submit', { method: 'POST', body: formData });
                 const result = await response.json().catch(() => ({}));
 
