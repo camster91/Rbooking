@@ -192,9 +192,15 @@ async function availability(request, env, store) {
     });
 }
 
+// Total upload size allowed per day, so a leaked login can't fill storage.
+function dailyUploadCap(env) {
+    const mb = Number(env.UPLOAD_DAILY_LIMIT_MB);
+    return Math.floor((mb > 0 ? mb : 1024) * 1024 * 1024);
+}
+
 // The file goes straight from the request into R2 as a stream, so a large
 // video costs almost no Worker CPU time. The booking then refers to it by key.
-async function uploadFile(request, env) {
+async function uploadFile(request, env, store) {
     const name = decodeURIComponent(request.headers.get('x-file-name') || '');
     const type = (request.headers.get('content-type') || '').split(';')[0].trim();
     const length = Number(request.headers.get('content-length'));
@@ -203,6 +209,9 @@ async function uploadFile(request, env) {
     }
     if (!Number.isFinite(length) || length <= 0 || !request.body) return fail(411, 'File size missing');
     if (length > MAX_UPLOAD_BYTES) return fail(413, 'File is too large (50MB max)');
+    if (!(await store.reserveUpload(todayInToronto(), length, dailyUploadCap(env)))) {
+        return fail(429, 'The daily upload limit has been reached. Please email the file to the AV team instead.');
+    }
 
     const key = `${randomHex()}-${safeFileName(name)}`;
     const { readable, writable } = new FixedLengthStream(length);
@@ -375,6 +384,8 @@ export async function purgeOldUploads(env, now = new Date()) {
             if (stale.length) { await env.UPLOADS.delete(stale); removed += stale.length; }
             cursor = page.truncated ? page.cursor : undefined;
         } while (cursor);
+        // Old daily upload totals are no longer needed.
+        await store.clearUploadLog(addDays(todayInToronto(now), -7));
     } catch (err) {
         console.error('Upload cleanup failed:', err.message);
     }
@@ -444,7 +455,7 @@ async function route(request, env) {
 
     if (method === 'PUT' && path === '/api/uploads') {
         if (!(await allowed(env.SUBMIT_LIMITER, `submit:${clientIp(request)}`))) return fail(429, 'Too many requests. Please wait a minute and try again.');
-        return uploadFile(request, env);
+        return uploadFile(request, env, store);
     }
     if (method === 'POST' && path === '/api/submit') {
         if (!(await allowed(env.SUBMIT_LIMITER, `submit:${clientIp(request)}`))) return fail(429, 'Too many booking requests. Please wait a minute and try again.');
@@ -456,16 +467,34 @@ async function route(request, env) {
     return path.startsWith('/api/') ? fail(404, 'Not found') : new Response('Not found', { status: 404 });
 }
 
+// Sent on every response. The pages may not be shown inside another site
+// (so a hidden frame can't trick staff into clicking Approve), and full
+// addresses aren't leaked to other sites through links.
+const SECURITY_HEADERS = {
+    'x-frame-options': 'DENY',
+    'content-security-policy': "frame-ancestors 'none'",
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'same-origin'
+};
+
+function withSecurityHeaders(res) {
+    const out = new Response(res.body, res);
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) out.headers.set(name, value);
+    return out;
+}
+
 export default {
     async fetch(request, env) {
+        let res;
         try {
-            return await route(request, env);
+            res = await route(request, env);
         } catch (err) {
             console.error('Unhandled error:', err.stack || err.message);
-            return new URL(request.url).pathname.startsWith('/api/')
+            res = new URL(request.url).pathname.startsWith('/api/')
                 ? fail(500, 'Something went wrong. Please try again.')
                 : new Response('Something went wrong', { status: 500 });
         }
+        return withSecurityHeaders(res);
     },
 
     async scheduled(controller, env, ctx) {

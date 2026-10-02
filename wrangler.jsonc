@@ -58,7 +58,8 @@
 		"SMTP_HOST": "smtp.titan.email",
 		"SMTP_PORT": "587",
 		"SMTP_USERNAME": "requests@rotmanav.ca",
-		"UPLOAD_RETENTION_DAYS": "90"
+		"UPLOAD_RETENTION_DAYS": "90",
+		"UPLOAD_DAILY_LIMIT_MB": "1024"
 	},
 
 	"observability": { "enabled": true }

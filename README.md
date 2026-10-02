@@ -12,7 +12,7 @@ Current release: **v2.0.0** — see [CHANGELOG.md](CHANGELOG.md).
 - **Admin page** (`/admin`, separate staff login): review, approve, decline, cancel, with a note to the requester
 - **Emails** through your mail server (Titan): staff get each request with a calendar hold; requesters get a confirmation, then an approve/decline/cancel email (approved ones carry a calendar invite in Toronto time)
 - **Uploads** (images/videos up to 50MB), staff-only, deleted 90 days after the event
-- Two logins, cross-site protection, per-IP rate limits, budget-number rule for after-hours events
+- Two logins, cross-site and clickjacking protection, per-IP rate limits, a daily upload cap, budget-number rule for after-hours events
 
 ## How it runs on Cloudflare
 
@@ -66,6 +66,7 @@ Non-secret settings live in `wrangler.jsonc` under `vars`:
 | SMTP_HOST / SMTP_PORT | Mail server (587 = STARTTLS, 465 = TLS) | smtp.titan.email / 587 |
 | SMTP_USERNAME | Mailbox that sends the emails | requests@rotmanav.ca |
 | UPLOAD_RETENTION_DAYS | Delete uploads this many days after the event | 90 |
+| UPLOAD_DAILY_LIMIT_MB | Total uploads allowed per day, in MB | 1024 |
 | BASE_PATH | Path the app lives under | /book |
 | BASE_URL | Optional: public URL used in email links (defaults to the request's address + BASE_PATH) | — |
 

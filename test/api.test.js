@@ -54,6 +54,14 @@ describe('pages and login', () => {
         }
     });
 
+    it('sends anti-framing headers on every response', async () => {
+        for (const res of [await call('/'), await call('/health', { auth: null }), await call('/api/nope')]) {
+            expect(res.headers.get('x-frame-options')).toBe('DENY');
+            expect(res.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+            expect(res.headers.get('referrer-policy')).toBe('same-origin');
+        }
+    });
+
     it('lets the admin login use the booking form too', async () => {
         expect((await call('/', { auth: ADMIN })).status).toBe(200);
     });
@@ -161,6 +169,22 @@ describe('uploads', () => {
         const missing = await submit(bookingForm({ 'upload-key': 'a'.repeat(24) + '-nope.png' }));
         expect(missing.status).toBe(400);
         expect(missing.data.message).toContain('attach it again');
+    });
+
+    it('stops uploads once the daily limit is reached', async () => {
+        const today = todayInToronto();
+        const row = await env.DB.prepare('SELECT bytes FROM upload_log WHERE day = ?').bind(today).first();
+        const used = row ? row.bytes : 0;
+        // Room for one more 2KB file today, not two
+        const limitMb = String((used + 3000) / (1024 * 1024));
+        const send = () => call('/api/uploads', {
+            method: 'PUT', body: new Uint8Array(2048), envOverride: { UPLOAD_DAILY_LIMIT_MB: limitMb },
+            headers: { 'content-type': 'image/png', 'x-file-name': 'a.png', 'content-length': '2048' }
+        });
+        expect((await send()).status).toBe(200);
+        const over = await send();
+        expect(over.status).toBe(429);
+        expect(over.data.message).toContain('daily upload limit');
     });
 });
 

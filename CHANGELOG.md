@@ -14,6 +14,10 @@
 - There are no built-in passwords any more: until `AUTH_PASS` and `ADMIN_PASS` are set, the app answers "Not set up yet".
 - Tests run inside the Workers runtime (Vitest + `@cloudflare/vitest-plugin`) against local D1 and R2.
 
+### Security
+- Pages can't be shown inside another website (`X-Frame-Options`, `frame-ancestors`), so a hidden frame can't trick staff into clicking Approve. Responses also send `nosniff` and `Referrer-Policy: same-origin`.
+- Uploads are capped per day (`UPLOAD_DAILY_LIMIT_MB`, default 1 GB), so a leaked login can't fill file storage. Needs migration `0002_upload_log.sql`.
+
 ### Removed
 - `TRUST_PROXY` and `SUBMIT_RATE_LIMIT` settings (Cloudflare gives the real visitor IP).
 

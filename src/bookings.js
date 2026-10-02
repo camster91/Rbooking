@@ -185,6 +185,13 @@ export function bookingStore(db) {
         withUploadBefore: (date) => all('SELECT * FROM bookings WHERE upload_key IS NOT NULL AND event_date < ?', date),
         clearUpload: (id) => db.prepare('UPDATE bookings SET upload_key = NULL WHERE id = ?').bind(id).run(),
         isUploadUsed: async (key) => Boolean(await db.prepare('SELECT 1 AS x FROM bookings WHERE upload_key = ?').bind(key).first()),
-        uploadKeys: async () => new Set((await db.prepare('SELECT upload_key FROM bookings WHERE upload_key IS NOT NULL').all()).results.map(r => r.upload_key))
+        uploadKeys: async () => new Set((await db.prepare('SELECT upload_key FROM bookings WHERE upload_key IS NOT NULL').all()).results.map(r => r.upload_key)),
+        // Counts an upload toward the day's total in one step. Returns false,
+        // and counts nothing, if it would go over the cap.
+        reserveUpload: async (day, bytes, cap) => Boolean(await db.prepare(
+            `INSERT INTO upload_log (day, bytes) SELECT ?1, ?2 WHERE ?2 <= ?3
+             ON CONFLICT (day) DO UPDATE SET bytes = bytes + ?2 WHERE bytes + ?2 <= ?3
+             RETURNING bytes`).bind(day, bytes, cap).first()),
+        clearUploadLog: (beforeDay) => db.prepare('DELETE FROM upload_log WHERE day < ?').bind(beforeDay).run()
     };
 }
