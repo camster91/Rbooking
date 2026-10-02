@@ -53,7 +53,8 @@ ADMIN_PASS=your_admin_password
 - ✅ **Admin page** (`/admin`): review, approve, decline and cancel bookings
 - ✅ **Double-booking check**: shows taken times on the form, blocks clashes with approved bookings, flags clashes with pending ones
 - ✅ **Emails**: staff get each request with a calendar hold; requesters get a confirmation, then an approve/decline/cancel email (approved ones include a calendar invite)
-- ✅ **Rate limiting** (10 bookings and 30 failed logins per 15 minutes per IP)
+- ✅ **Rate limiting** (30 bookings and 30 wrong passwords per 15 minutes per IP; correct logins are never blocked)
+- ✅ **Cross-site protection**: other websites can't submit bookings through a logged-in browser
 - ✅ **Input validation & XSS protection**
 - ✅ **Two logins**: shared form login and a separate AV staff login
 - ✅ **Health check endpoint**
@@ -154,7 +155,8 @@ docker run -p 3000:3000 \
 | ADMIN_PASS | AV staff password (required in production) | development default only |
 | DATA_DIR | Folder for the bookings database | ./data |
 | UPLOAD_RETENTION_DAYS | Delete uploads this many days after the event | 90 |
-| TRUST_PROXY | Set (e.g. `1`) when behind a reverse proxy, so rate limits are per user | - |
+| TRUST_PROXY | Set (e.g. `1`) when behind a reverse proxy, so rate limits are per user. `false`/`0` turns it off | - |
+| SUBMIT_RATE_LIMIT | Bookings allowed per IP per 15 minutes | 30 |
 
 ## License
 

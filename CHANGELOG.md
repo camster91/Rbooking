@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.2.1 — 2026-10-02
+
+Fixes from a full code review.
+
+### Security
+- **Calendar invite tampering** — an email address in quoted form could hide line breaks and add lines to the staff invite. Only plain addresses are accepted now, and invite addresses are cleaned again before use.
+- **Cross-site bookings** — other websites could submit bookings through a logged-in browser. Cross-site posts are now refused.
+- **Lockouts on shared networks** — the failed-login limit now counts only wrong passwords and never blocks a correct login. The booking limit is raised to 30 per 15 minutes per IP (`SUBMIT_RATE_LIMIT`).
+
+### Fixed
+- Admin "All" list shows newest first, and links from staff emails always find their booking.
+- The nightly upload cleanup can no longer crash the server on a missing file or folder.
+- The budget-number rule (CC#/CFC# outside regular AV hours) is now checked by the server too.
+- Calendar invites carry the Toronto time zone, so they show the right time everywhere.
+- Picking dates quickly on the form, or switching admin tabs quickly, no longer shows stale results.
+- `TRUST_PROXY=false` no longer stops the app from starting.
+
+### Faster
+- The admin list finds clashes with one database query instead of one per booking, and gets the review count in the same request.
+
 ## v1.2.0 — 2026-10-02
 
 ### Added

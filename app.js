@@ -86,9 +86,22 @@ function adminAuth(req, res, next) {
 // Behind a reverse proxy every request arrives from the proxy's IP, so the
 // rate limiter would lump all users together. Set TRUST_PROXY (e.g. 1 for one
 // proxy hop) so req.ip is the real client address.
-if (process.env.TRUST_PROXY) {
-    const tp = process.env.TRUST_PROXY;
-    app.set('trust proxy', tp === 'true' ? true : (/^\d+$/.test(tp) ? Number(tp) : tp));
+// Accepts true/false, a number of proxy hops, or Express's IP/subnet list.
+function parseTrustProxy(raw) {
+    const value = String(raw ?? '').trim();
+    if (!value || /^(false|no|off|0)$/i.test(value)) return null;
+    if (/^(true|yes|on)$/i.test(value)) return true;
+    if (/^\d+$/.test(value)) return Number(value);
+    return value;
+}
+
+const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+if (trustProxy !== null) {
+    try {
+        app.set('trust proxy', trustProxy);
+    } catch (err) {
+        throw new Error(`TRUST_PROXY="${process.env.TRUST_PROXY}" is not valid (${err.message}). Use true, a number of proxy hops, or IP addresses.`);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,12 +126,14 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Slow down password guessing: count only failed logins (401s) per IP.
+// Slow down password guessing. Only requests that send credentials and get
+// them wrong are counted or blocked, so the browser's first credential-less
+// request never counts, and people who log in correctly are never locked out
+// by someone else guessing from the same network.
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 30,
-    requestWasSuccessful: (req, res) => res.statusCode !== 401,
-    skipSuccessfulRequests: true,
+    skip: (req) => !req.headers.authorization || loginRole(req) !== null,
     standardHeaders: true,
     legacyHeaders: false,
     message: 'Too many failed logins. Please try again in 15 minutes.'
@@ -152,11 +167,49 @@ const upload = multer({
 // Rate limiting middleware
 const submitLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.SUBMIT_RATE_LIMIT, 10) || 10, // requests per IP per window
+    // Per IP. Many people can share one campus address, so this is set to
+    // stop floods rather than to limit any one person.
+    max: parseInt(process.env.SUBMIT_RATE_LIMIT, 10) || 30,
     message: { success: false, message: 'Too many booking requests. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
 });
+
+// Block cross-site POSTs (CSRF). Browsers send the saved Basic Auth login
+// with any request to this site, so another website could otherwise submit
+// bookings as a logged-in user. Browsers mark cross-site requests with
+// Sec-Fetch-Site and Origin; requests from tools like curl send neither.
+function allowedOrigins(req) {
+    const hosts = new Set([req.get('host')]);
+    if (app.get('trust proxy') && req.get('x-forwarded-host')) hosts.add(req.get('x-forwarded-host'));
+    if (process.env.BASE_URL) {
+        try { hosts.add(new URL(process.env.BASE_URL).host); } catch { /* ignore a bad BASE_URL */ }
+    }
+    return hosts;
+}
+
+function sameOriginOnly(req, res, next) {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    // Modern browsers say outright whether a request is cross-site. Trust that
+    // first: behind a proxy the Host the server sees may not match Origin.
+    const fetchSite = req.get('sec-fetch-site');
+    if (fetchSite === 'cross-site') {
+        return res.status(403).json({ success: false, message: 'Cross-site requests are not allowed' });
+    }
+    if (fetchSite) return next();
+    // Older browsers: compare Origin with this server's host names.
+    const origin = req.get('origin');
+    if (origin) {
+        let host = null;
+        try { host = new URL(origin).host; } catch { /* "null" or garbage */ }
+        if (!host || !allowedOrigins(req).has(host)) {
+            return res.status(403).json({ success: false, message: 'Cross-site requests are not allowed' });
+        }
+    }
+    return next();
+}
+
+app.use(sameOriginOnly);
 
 // Middleware
 app.use(express.json());
@@ -184,8 +237,13 @@ app.get('/admin', adminAuth, (req, res) => {
 const EVENT_SPACES = ['full', 'one-third', 'two-thirds', 'fleck-atrium'];
 const RECORDING_OPTIONS = ['none', 'basic-recording', 'live-web-recording'];
 
+// validator.isEmail alone accepts quoted addresses that can hold spaces and
+// line breaks ("a\r\nb"@x.com), which would break the calendar invite and
+// mail headers. Only allow plain addresses.
+const PLAIN_EMAIL = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
+
 function validateEmail(email) {
-    return typeof email === 'string' && validator.isEmail(email);
+    return typeof email === 'string' && PLAIN_EMAIL.test(email) && validator.isEmail(email);
 }
 
 const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -248,6 +306,22 @@ function parseEventDate(raw) {
     const date = new Date(Date.UTC(y, m - 1, d));
     if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
     return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Regular AV hours by weekday (0 = Sunday). Outside them a CC# or CFC# is
+// required. index.html shows the same rule to the user before they submit.
+const REGULAR_HOURS = {
+    0: { start: '08:00', end: '17:00' },
+    5: { start: '07:00', end: '18:00' },
+    6: { start: '08:00', end: '17:00' }
+};
+const WEEKDAY_HOURS = { start: '07:00', end: '20:00' };
+
+function needsBudgetNumber(isoDate, registrationTime, shutdownTime) {
+    const [y, m, d] = isoDate.split('-').map(Number);
+    const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    const hours = REGULAR_HOURS[day] || WEEKDAY_HOURS;
+    return registrationTime < hours.start || shutdownTime > hours.end;
 }
 
 // Today's date in Toronto as YYYY-MM-DD (en-CA formats dates that way).
@@ -373,6 +447,9 @@ app.post('/api/submit', submitLimiter, handleUpload, async (req, res) => {
         if (!timeValidation.valid) {
             return fail(400, timeValidation.message);
         }
+        if (needsBudgetNumber(input.eventDate, input.registrationTime, input.shutdownTime) && !input.ccNumber && !input.cfcNumber) {
+            return fail(400, 'Your event runs outside regular AV hours, so please add a CC# or CFC# budget number');
+        }
 
         let created;
         try {
@@ -419,19 +496,34 @@ app.post('/api/submit', submitLimiter, handleUpload, async (req, res) => {
 const adminApi = express.Router();
 adminApi.use(adminAuth);
 
-adminApi.get('/bookings', (req, res) => {
-    const scope = ['upcoming', 'past', 'all'].includes(req.query.scope) ? req.query.scope : 'upcoming';
-    const status = ['pending', 'approved', 'declined', 'cancelled'].includes(req.query.status) ? req.query.status : undefined;
-    const bookings = store.list({ scope, status, today: todayInToronto() }).map(b => ({
+function adminView(b, conflicts) {
+    return {
         ...b,
         spaceName: mail.formatEventSpace(b.eventSpace),
         recordingName: mail.formatRecordingOption(b.recordingOption),
         uploadUrl: b.uploadFile ? `uploads/${encodeURIComponent(b.uploadFile)}` : null,
-        conflicts: ['pending', 'approved'].includes(b.status)
-            ? store.findConflicts(b).map(c => ({ id: c.id, eventName: c.eventName, status: c.status }))
-            : []
-    }));
-    res.json({ success: true, bookings });
+        conflicts: (conflicts.get(b.id) || []).map(c => ({ id: c.id, eventName: c.eventName, status: c.status }))
+    };
+}
+
+adminApi.get('/bookings', (req, res) => {
+    const scope = ['upcoming', 'past', 'all'].includes(req.query.scope) ? req.query.scope : 'upcoming';
+    const status = ['pending', 'approved', 'declined', 'cancelled'].includes(req.query.status) ? req.query.status : undefined;
+    const today = todayInToronto();
+    const bookings = store.list({ scope, status, today });
+    const conflicts = store.conflictsFor(bookings);
+    res.json({
+        success: true,
+        bookings: bookings.map(b => adminView(b, conflicts)),
+        pendingCount: store.countPending(today)
+    });
+});
+
+// One booking, so links from staff emails work however many bookings exist.
+adminApi.get('/bookings/:id', (req, res) => {
+    const booking = store.get(Number(req.params.id));
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    res.json({ success: true, booking: adminView(booking, store.conflictsFor([booking])) });
 });
 
 adminApi.post('/bookings/:id/status', async (req, res) => {
@@ -473,20 +565,30 @@ const UPLOAD_RETENTION_DAYS = parseInt(process.env.UPLOAD_RETENTION_DAYS, 10) ||
 // are left alone).
 function purgeOldUploads(now = new Date()) {
     let removed = 0;
-    const cutoff = addDays(todayInToronto(now), -UPLOAD_RETENTION_DAYS);
-    for (const booking of store.withUploadBefore(cutoff)) {
-        fs.rmSync(path.join(uploadsDir, booking.uploadFile), { force: true });
-        store.clearUpload(booking.id);
-        removed++;
-    }
-    const referenced = store.uploadFiles();
-    for (const name of fs.readdirSync(uploadsDir)) {
-        if (name.startsWith('.') || referenced.has(name)) continue;
-        const file = path.join(uploadsDir, name);
-        if (now - fs.statSync(file).mtimeMs > 24 * 60 * 60 * 1000) {
-            fs.rmSync(file, { force: true });
-            removed++;
+    // One bad file must never stop the cleanup, let alone crash the server.
+    const tryRemove = (file) => {
+        try {
+            const stat = fs.statSync(file, { throwIfNoEntry: false });
+            if (stat && stat.isFile()) { fs.rmSync(file, { force: true }); removed++; }
+        } catch (err) {
+            console.error(`Upload cleanup: could not remove ${path.basename(file)}:`, err.message);
         }
+    };
+    try {
+        const cutoff = addDays(todayInToronto(now), -UPLOAD_RETENTION_DAYS);
+        for (const booking of store.withUploadBefore(cutoff)) {
+            tryRemove(path.join(uploadsDir, booking.uploadFile));
+            store.clearUpload(booking.id);
+        }
+        const referenced = store.uploadFiles();
+        for (const name of fs.readdirSync(uploadsDir)) {
+            if (name.startsWith('.') || referenced.has(name)) continue;
+            const file = path.join(uploadsDir, name);
+            const stat = fs.statSync(file, { throwIfNoEntry: false });
+            if (stat && stat.isFile() && now - stat.mtimeMs > 24 * 60 * 60 * 1000) tryRemove(file);
+        }
+    } catch (err) {
+        console.error('Upload cleanup failed:', err.message);
     }
     if (removed) console.log(`Upload cleanup: removed ${removed} file(s)`);
     return removed;
@@ -505,6 +607,8 @@ module.exports = {
     sentMail: mail.sentMail,
     validateEmail,
     validateTimeOrder,
+    needsBudgetNumber,
+    parseTrustProxy,
     parseEventDate,
     todayInToronto,
     addDays,

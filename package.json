@@ -1,6 +1,6 @@
 {
   "name": "rbooking",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Rotman AV event booking: booking form, admin page and email notifications",
   "main": "app.js",
   "engines": {
