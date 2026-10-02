@@ -1,6 +1,6 @@
-# Rotman AV Booking System
+# rbooking
 
-A standalone event booking application for Rotman AV Services.
+Event booking app for Rotman AV Services.
 
 Current release: **v1.2.0** — see [CHANGELOG.md](CHANGELOG.md).
 
@@ -122,7 +122,7 @@ The image sets `NODE_ENV=production`, so the app refuses to start unless `AUTH_P
 Mount `/app/data` on a volume: it holds the bookings database. Without it, bookings are lost when the container is replaced.
 
 ```bash
-docker build -t rotman-av-booking .
+docker build -t rbooking .
 docker run -p 3000:3000 \
   --restart unless-stopped \
   -v rotman-av-uploads:/app/uploads \
@@ -133,7 +133,7 @@ docker run -p 3000:3000 \
   -e ADMIN_PASS="set_another_strong_password" \
   -e BASE_URL="https://your-deployment.example.com" \
   -e SMTP_PASSWORD="your_password" \
-  rotman-av-booking
+  rbooking
 ```
 
 ## Environment Variables

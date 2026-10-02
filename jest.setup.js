@@ -19,4 +19,4 @@ process.env.SUBMIT_RATE_LIMIT = '1000';
 
 // Uploads go to a throwaway folder so tests (including the cleanup test) never
 // touch real files
-process.env.UPLOADS_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rotman-av-test-'));
+process.env.UPLOADS_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rbooking-test-'));

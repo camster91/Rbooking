@@ -1,7 +1,7 @@
 {
-  "name": "rotman-av-booking",
+  "name": "rbooking",
   "version": "1.2.0",
-  "description": "Rotman AV Event Booking System - Standalone booking form with email notifications",
+  "description": "Rotman AV event booking: booking form, admin page and email notifications",
   "main": "app.js",
   "engines": {
     "node": ">=20.0.0"
