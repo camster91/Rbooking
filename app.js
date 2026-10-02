@@ -51,6 +51,34 @@ function basicAuth(req, res, next) {
     return res.status(401).send('Authentication required');
 }
 
+// Email transporter - initialized async (see initializeEmailTransporter)
+let transporter = null;
+// One of: 'uninitialized' | 'test' | 'smtp' | 'ethereal' | 'console'
+let emailMode = 'uninitialized';
+
+// Behind a reverse proxy every request arrives from the proxy's IP, so the
+// rate limiter would lump all users together. Set TRUST_PROXY (e.g. 1 for one
+// proxy hop) so req.ip is the real client address.
+if (process.env.TRUST_PROXY) {
+    const tp = process.env.TRUST_PROXY;
+    app.set('trust proxy', tp === 'true' ? true : (/^\d+$/.test(tp) ? Number(tp) : tp));
+}
+
+// Health check endpoint - public so the container healthcheck can reach it
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        email: {
+            mode: emailMode,
+            configured: Boolean(transporter),
+            // In production anything other than real SMTP means bookings are not delivered
+            degraded: IS_PRODUCTION && emailMode !== 'smtp'
+        }
+    });
+});
+
 app.use(basicAuth);
 
 // Ensure uploads directory exists
@@ -71,10 +99,12 @@ const upload = multer({
     storage,
     limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
     fileFilter: (req, file, cb) => {
-        const allowed = /jpeg|jpg|png|gif|mp4|mov|avi|webm/;
-        const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-        const mime = allowed.test(file.mimetype);
-        cb(null, ext && mime);
+        const ext = /^\.(jpe?g|png|gif|mp4|mov|avi|webm)$/.test(path.extname(file.originalname).toLowerCase());
+        const mime = /^(image\/(p?jpe?g|png|gif)|video\/(mp4|quicktime|x-msvideo|avi|webm))$/.test(file.mimetype);
+        if (ext && mime) return cb(null, true);
+        const err = new Error('Only JPG, PNG, GIF, MP4, MOV, AVI or WEBM files can be uploaded');
+        err.status = 400;
+        cb(err);
     }
 });
 
@@ -90,28 +120,7 @@ const submitLimiter = rateLimit({
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(__dirname));
 app.use('/uploads', express.static(uploadsDir));
-
-// Email transporter - initialized async (see initializeEmailTransporter)
-let transporter = null;
-// One of: 'uninitialized' | 'test' | 'smtp' | 'ethereal' | 'console'
-let emailMode = 'uninitialized';
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        email: {
-            mode: emailMode,
-            configured: Boolean(transporter),
-            // In production anything other than real SMTP means bookings are not delivered
-            degraded: IS_PRODUCTION && emailMode !== 'smtp'
-        }
-    });
-});
 
 async function initializeEmailTransporter() {
     // Use console logging in test environment
@@ -330,8 +339,8 @@ function generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace,
         `LOCATION:${escapeICalText(`${formatEventSpace(eventSpace)} - Rotman School of Management`)}`,
         'STATUS:CONFIRMED',
         'SEQUENCE:0',
-        `ORGANIZER;CN:"${escapeICalParam('Rotman AV Services')}":mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
-        `ATTENDEE;CN:"${escapeICalParam(personOfContact)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${emailAddress}`,
+        `ORGANIZER;CN="${escapeICalParam('Rotman AV Services')}":mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
+        `ATTENDEE;CN="${escapeICalParam(personOfContact)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${emailAddress}`,
         'END:VEVENT',
         'END:VCALENDAR'
     ];
@@ -344,8 +353,20 @@ function sanitizeForEmail(input) {
     return escapeHtml(String(input));
 }
 
+// Run multer so its errors (file too big, wrong type) come back as JSON the
+// form can show, instead of Express's HTML error page.
+function handleUpload(req, res, next) {
+    upload.single('media-upload')(req, res, (err) => {
+        if (!err) return next();
+        const message = err.code === 'LIMIT_FILE_SIZE'
+            ? 'File is too large (50MB max)'
+            : (err.status === 400 ? err.message : 'File upload failed');
+        return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ success: false, message });
+    });
+}
+
 // Handle form submission
-app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req, res) => {
+app.post('/api/submit', submitLimiter, handleUpload, async (req, res) => {
     try {
         const {
             'event-space': eventSpace,
@@ -389,6 +410,9 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
             ccNumber: sanitizeForEmail(ccNumber),
             cfcNumber: sanitizeForEmail(cfcNumber),
             otherNotes: sanitizeForEmail(otherNotes),
+            // format* echo unknown values back unchanged, so escape them too
+            eventSpace: sanitizeForEmail(formatEventSpace(eventSpace)),
+            recordingOption: sanitizeForEmail(formatRecordingOption(recordingOption)),
         };
 
         const fileName = req.file ? req.file.filename : null;
@@ -409,7 +433,7 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr style="border-bottom: 1px solid #dee2e6;">
                             <td style="padding: 12px 0; color: #6c757d; width: 40%;">Event Space</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${formatEventSpace(eventSpace)}</td>
+                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.eventSpace}</td>
                         </tr>
                         <tr style="border-bottom: 1px solid #dee2e6;">
                             <td style="padding: 12px 0; color: #6c757d;">Contact Person</td>
@@ -425,7 +449,7 @@ app.post('/api/submit', submitLimiter, upload.single('media-upload'), async (req
                         </tr>
                         <tr style="border-bottom: 1px solid #dee2e6;">
                             <td style="padding: 12px 0; color: #6c757d;">Recording Option</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${formatRecordingOption(recordingOption)}</td>
+                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.recordingOption}</td>
                         </tr>
                     </table>
 

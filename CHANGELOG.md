@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Calendar invites** — `ORGANIZER`/`ATTENDEE` used `CN:` instead of `CN=`, which made the invite invalid for strict calendar apps.
+- **Docker healthcheck** — it hit `/` without credentials, got 401, and marked the container unhealthy forever. It now hits `/health`, which no longer needs a login.
+- **Upload errors** — a too-big or wrong-type file now returns a JSON message the form can show, instead of an HTML error page (which the form showed as "check your connection").
+
+### Security
+- The app no longer serves its whole folder as static files (source, `package.json`, `Dockerfile`, `node_modules`).
+- Event space and recording option are HTML-escaped in the staff email (unknown values were echoed raw).
+- Upload type check is now exact (it was a substring match, so `.mp4html` passed).
+- New `.dockerignore` keeps a local `.env` and `node_modules` out of the image.
+- Optional `TRUST_PROXY` setting so rate limiting works per user behind a reverse proxy.
+
 ## v1.1.0 — 2026-09-22
 
 Security and reliability release following a comprehensive code review.

@@ -111,8 +111,8 @@ describe('Helper Functions', () => {
         it('produces RFC 5545 date-times and single-line ORGANIZER/ATTENDEE properties', () => {
             expect(unfolded).toContain('DTSTART:20260501T090000');
             expect(unfolded).toContain('DTEND:20260501T120000');
-            expect(unfolded).toContain('ORGANIZER;CN:"Rotman AV Services":mailto:requests@rotmanav.ca');
-            expect(unfolded).toContain('ATTENDEE;CN:"Test User";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:test@example.com');
+            expect(unfolded).toContain('ORGANIZER;CN="Rotman AV Services":mailto:requests@rotmanav.ca');
+            expect(unfolded).toContain('ATTENDEE;CN="Test User";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:test@example.com');
             expect(ics).not.toContain('BEGIN:ORGANIZER');
         });
 
@@ -152,6 +152,20 @@ describe('API Endpoints', () => {
         it('should reject requests without credentials', async () => {
             const res = await request(app).get('/');
             expect(res.status).toBe(401);
+        });
+
+        it('should leave /health open for the container healthcheck', async () => {
+            const res = await request(app).get('/health');
+            expect(res.status).toBe(200);
+        });
+    });
+
+    describe('Static files', () => {
+        it('should not serve app source or config files', async () => {
+            for (const file of ['/app.js', '/package.json', '/Dockerfile', '/node_modules/express/package.json']) {
+                const res = await request(app).get(file).set(auth);
+                expect(res.status).toBe(404);
+            }
         });
     });
 
@@ -309,6 +323,18 @@ describe('API Endpoints', () => {
 
             expect(res.status).toBe(400);
             expect(res.body.message).toContain('HH:MM');
+        });
+
+        it('should reject disallowed upload types with a JSON error', async () => {
+            const res = await request(app)
+                .post('/api/submit')
+                .set(auth)
+                .field('email-address', 'test@example.com')
+                .attach('media-upload', Buffer.from('<html></html>'), { filename: 'evil.mp4html', contentType: 'video/mp4' });
+
+            expect(res.status).toBe(400);
+            expect(res.body.success).toBe(false);
+            expect(res.body.message).toContain('can be uploaded');
         });
     });
 });
