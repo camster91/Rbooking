@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.2.2 — 2026-10-02
+
+UI review fixes. All pages now pass an automated accessibility check (axe, WCAG 2 AA).
+
+- Green buttons (Submit, Approve) were too low-contrast to read easily; they use a darker green now.
+- The upload box was a button with another button inside it, which confuses screen readers and keyboards. It now has a real "Choose a file" button.
+- Budget numbers: instead of two asterisks (which suggested both were needed), a note says one of them is needed.
+- Small files showed as "0.0MB"; sizes under 1MB show in KB.
+- Cancelling the sign-in box showed a bare "Authentication required" page; it now shows a styled "Sign in needed" page with a Try again button.
+- Thank-you page: the check icon was tiny and the text said "confirmation" was coming; it now matches the new flow.
+- Admin and thank-you pages mark their main content for screen readers.
+
 ## v1.2.1 — 2026-10-02
 
 Fixes from a full code review.
