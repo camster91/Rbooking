@@ -17,6 +17,8 @@
             --accent: #2563eb;
             --accent-hover: #1d4ed8;
             --success: #10b981;
+            /* Darker green for buttons: white text needs 4.5:1 contrast */
+            --success-strong: #047857;
             --warning: #f59e0b;
             --danger: #ef4444;
             --bg: #0f172a;
@@ -155,7 +157,10 @@
             transition: all 0.2s;
             background: rgba(255,255,255,0.02);
         }
-        .upload-zone:hover, .upload-zone:focus-visible, .upload-zone.dragover { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); outline: none; }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); }
+        .btn-choose { margin: 10px 0 8px; background: rgba(255,255,255,0.08); border: 1px solid var(--border); color: white; padding: 8px 18px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+        .btn-choose:hover { background: rgba(255,255,255,0.14); }
+        .btn-choose:focus-visible, .btn-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         .upload-zone svg { color: var(--muted); margin-bottom: 10px; }
         .upload-zone p { margin: 5px 0 0; font-size: 0.95rem; color: #cbd5e1; }
         .upload-zone small { color: var(--muted); }
@@ -176,8 +181,8 @@
         .btn-back:hover { background: rgba(255,255,255,0.05); color: white; }
         .btn-next { background: var(--accent); color: white; box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2); }
         .btn-next:hover { background: var(--accent-hover); }
-        .btn-submit { background: var(--success); color: white; box-shadow: 0 10px 20px rgba(16, 185, 129, 0.2); }
-        .btn-submit:hover { background: #059669; }
+        .btn-submit { background: var(--success-strong); color: white; box-shadow: 0 10px 20px rgba(16, 185, 129, 0.2); }
+        .btn-submit:hover { background: #065f46; }
         .btn-nav:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* Review step styles */
@@ -390,14 +395,15 @@
 
                 <div class="row g-3">
                     <div class="col-md-6 field-group">
-                        <label class="field-label" for="cc-number">CC# (Cost Center) <span id="budget-required-mark" hidden>*</span></label>
+                        <label class="field-label" for="cc-number">CC# (Cost Center)</label>
                         <input type="text" name="cc-number" id="cc-number" placeholder="e.g., 12345-6789" maxlength="100">
                     </div>
                     <div class="col-md-6 field-group">
-                        <label class="field-label" for="cfc-number">CFC# (Cost Fetch Code) <span id="budget-required-mark-2" hidden>*</span></label>
+                        <label class="field-label" for="cfc-number">CFC# (Cost Fetch Code)</label>
                         <input type="text" name="cfc-number" id="cfc-number" placeholder="e.g., 98765-4321" maxlength="100">
                     </div>
                 </div>
+                <div class="field-hint" id="budget-hint" hidden style="margin: -15px 0 20px;">Your event is outside regular AV hours, so one of these is needed.</div>
                 <div class="field-error" id="budget-error" role="alert" style="margin: -15px 0 20px;">Your event is outside regular AV hours, so please add a CC# or CFC#.</div>
 
                 <div class="field-group">
@@ -407,11 +413,12 @@
 
                 <div class="field-group">
                     <div class="field-label" id="upload-label">Attach Media (optional)</div>
-                    <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-labelledby="upload-label upload-help">
+                    <div class="upload-zone" id="upload-zone">
                         <input type="file" name="media-upload" id="media-upload" accept=".jpg,.jpeg,.png,.gif,.mp4,.mov,.avi,.webm" hidden>
                         <div class="upload-content">
                             <i data-lucide="cloud-upload" style="width: 40px; height: 40px;"></i>
-                            <p>Drag &amp; drop or click to upload</p>
+                            <p>Drag &amp; drop a file here, or</p>
+                            <button type="button" class="btn-choose" id="choose-file" aria-describedby="upload-label upload-help">Choose a file</button><br>
                             <small id="upload-help">Images (JPG, PNG, GIF) or videos (MP4, MOV, AVI, WEBM) up to 50MB</small>
                         </div>
                         <div class="upload-preview" id="upload-preview">
@@ -750,8 +757,7 @@
         function checkBudgetRequired() {
             const needed = budgetRequired();
             $('budget-alert').hidden = !needed;
-            $('budget-required-mark').hidden = !needed;
-            $('budget-required-mark-2').hidden = !needed;
+            $('budget-hint').hidden = !needed;
             if (!needed) $('budget-error').classList.remove('show');
         }
 
@@ -772,10 +778,16 @@
             $('upload-preview').style.display = 'none';
         }
 
-        uploadZone.addEventListener('click', () => uploadInput.click());
-        uploadZone.addEventListener('keydown', (e) => {
-            if (e.target === uploadZone && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); uploadInput.click(); }
+        // The whole box opens the file picker for mouse users; keyboard users
+        // get the real "Choose a file" button inside it.
+        uploadZone.addEventListener('click', (e) => {
+            if (!e.target.closest('button')) uploadInput.click();
         });
+        $('choose-file').addEventListener('click', () => uploadInput.click());
+
+        function formatSize(bytes) {
+            return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+        }
         uploadInput.addEventListener('change', () => {
             const file = uploadInput.files[0];
             $('upload-error').classList.remove('show');
@@ -788,7 +800,7 @@
                 resetUpload();
                 return;
             }
-            $('preview-name').textContent = `${file.name} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`;
+            $('preview-name').textContent = `${file.name} (${formatSize(file.size)})`;
             document.querySelector('.upload-content').style.display = 'none';
             $('upload-preview').style.display = 'flex';
         });

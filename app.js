@@ -68,9 +68,17 @@ function loginRole(req) {
     return null;
 }
 
+// Shown if someone cancels the browser's sign-in box.
+const SIGN_IN_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in needed - Rotman AV</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#f1f5f9;font-family:system-ui,sans-serif;padding:16px}
+main{max-width:420px;text-align:center;background:#1e293b;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:32px}
+h1{font-size:1.3rem;margin:0 0 10px}p{color:#cbd5e1;margin:0 0 20px}a{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;font-weight:600;padding:10px 22px;border-radius:10px}</style>
+</head><body><main><h1>Sign in needed</h1><p>This page is for Rotman staff. Ask the AV team for the login, then try again.</p><a href="">Try again</a></main></body></html>`;
+
 function challenge(res, realm) {
     res.set('WWW-Authenticate', `Basic realm="${realm}"`);
-    return res.status(401).send('Authentication required');
+    return res.status(401).type('html').send(SIGN_IN_PAGE);
 }
 
 function basicAuth(req, res, next) {
