@@ -17,7 +17,9 @@ const {
     todayInToronto,
     addDays,
     purgeOldUploads,
-    uploadsDir
+    uploadsDir,
+    needsBudgetNumber,
+    parseTrustProxy
 } = require('../app');
 const { spacesClash, timesOverlap } = require('../lib/bookings');
 
@@ -84,6 +86,8 @@ describe('Helper Functions', () => {
         });
 
         it('should reject invalid emails', () => {
+            expect(validateEmail('"x\r\nATTACH:http://evil"@example.com')).toBeFalsy();
+            expect(validateEmail('"two words"@example.com')).toBeFalsy();
             expect(validateEmail('invalid')).toBeFalsy();
             expect(validateEmail('')).toBeFalsy();
             expect(validateEmail(null)).toBeFalsy();
@@ -143,6 +147,25 @@ describe('Helper Functions', () => {
         });
     });
 
+    describe('needsBudgetNumber', () => {
+        it('follows regular AV hours by weekday', () => {
+            expect(needsBudgetNumber('2026-10-05', '07:00', '20:00')).toBe(false); // Monday
+            expect(needsBudgetNumber('2026-10-05', '06:30', '12:00')).toBe(true);
+            expect(needsBudgetNumber('2026-10-09', '09:00', '18:30')).toBe(true);  // Friday
+            expect(needsBudgetNumber('2026-10-10', '08:00', '17:00')).toBe(false); // Saturday
+            expect(needsBudgetNumber('2026-10-11', '07:30', '12:00')).toBe(true);  // Sunday
+        });
+    });
+
+    describe('parseTrustProxy', () => {
+        it('treats off values as off and passes the rest through', () => {
+            for (const off of [undefined, '', 'false', 'FALSE', '0', 'no', 'off']) expect(parseTrustProxy(off)).toBeNull();
+            expect(parseTrustProxy('true')).toBe(true);
+            expect(parseTrustProxy('2')).toBe(2);
+            expect(parseTrustProxy('loopback, 10.0.0.0/8')).toBe('loopback, 10.0.0.0/8');
+        });
+    });
+
     describe('double-booking rules', () => {
         it('treats every Event Hall set-up as the same room', () => {
             expect(spacesClash('full', 'one-third')).toBe(true);
@@ -168,8 +191,9 @@ describe('Helper Functions', () => {
         const unfolded = unfold(ics);
 
         it('produces RFC 5545 date-times and single-line ORGANIZER/ATTENDEE properties', () => {
-            expect(unfolded).toContain('DTSTART:20260501T083000');
-            expect(unfolded).toContain('DTEND:20260501T120000');
+            expect(unfolded).toContain('DTSTART;TZID=America/Toronto:20260501T083000');
+            expect(unfolded).toContain('DTEND;TZID=America/Toronto:20260501T120000');
+            expect(unfolded).toContain('BEGIN:VTIMEZONE');
             expect(unfolded).toContain('ORGANIZER;CN="Rotman AV Services":mailto:requests@rotmanav.ca');
             expect(unfolded).toContain('ATTENDEE;CN="Test User";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:test@example.com');
             expect(ics).not.toContain('BEGIN:ORGANIZER');
@@ -189,6 +213,12 @@ describe('Helper Functions', () => {
             expect(unfolded).toContain('Launch\\, Part 1');    // comma escaped in SUMMARY
             expect(unfolded).toContain('Line one\\nATTACH');   // CRLF became a literal escape
             ics.split('\r\n').forEach((line) => expect(line).not.toMatch(/^ATTACH/i));
+        });
+
+        it('never lets an email address add lines to the invite', () => {
+            const evil = unfold(generateICS({ ...booking, contactEmail: '"x\r\nATTACH:http://evil"@example.com' }));
+            evil.split('\r\n').forEach((line) => expect(line).not.toMatch(/^ATTACH/));
+            expect(evil).toContain('mailto:xATTACHhttp//evil@example.com');
         });
 
         it('folds every line to at most 75 octets', () => {
@@ -285,6 +315,17 @@ describe('POST /api/submit', () => {
         const res = await submit(bookingForm({ 'email-address': 'invalid-email' }));
         expect(res.status).toBe(400);
         expect(res.body.success).toBe(false);
+    });
+
+    it('requires a budget number outside regular AV hours', async () => {
+        // A future Sunday, booked from 6am
+        let sunday = nextDate();
+        while (new Date(sunday + 'T12:00:00Z').getUTCDay() !== 0) sunday = nextDate();
+        const early = { 'event-date': sunday, 'registration-time': '06:00', 'event-start-time': '06:30' };
+        const missing = await submit(bookingForm(early));
+        expect(missing.status).toBe(400);
+        expect(missing.body.message).toContain('CC#');
+        expect((await submit(bookingForm({ ...early, 'cfc-number': '98765' }))).status).toBe(200);
     });
 
     it('should reject dates in the past', async () => {
@@ -493,5 +534,80 @@ describe('Upload cleanup', () => {
         } finally {
             for (const f of [oldFile, keepFile, strayFile]) fs.rmSync(path.join(uploadsDir, f), { force: true });
         }
+    });
+});
+
+describe('Cross-site protection', () => {
+    it('refuses booking posts from other websites', async () => {
+        const fromEvil = await submit(bookingForm()).set('Origin', 'https://evil.example');
+        expect(fromEvil.status).toBe(403);
+        const crossSite = await submit(bookingForm()).set('Sec-Fetch-Site', 'cross-site');
+        expect(crossSite.status).toBe(403);
+    });
+
+    it('allows posts from the app itself', async () => {
+        const res = await submit(bookingForm()).set('Host', 'booking.test').set('Origin', 'http://booking.test');
+        expect(res.status).toBe(200);
+        // Behind a proxy the Host can differ; the browser's same-origin flag is enough
+        const proxied = await submit(bookingForm()).set('Host', 'internal:3000').set('Origin', 'https://booking.example').set('Sec-Fetch-Site', 'same-origin');
+        expect(proxied.status).toBe(200);
+    });
+
+    it('protects admin status changes too', async () => {
+        const created = await submit(bookingForm());
+        const res = await setStatus(created.body.id, 'approved').set('Origin', 'https://evil.example');
+        expect(res.status).toBe(403);
+        expect(store.get(created.body.id).status).toBe('pending');
+    });
+});
+
+describe('Admin list', () => {
+    it('shows the newest bookings first in All, and can fetch any one booking', async () => {
+        const older = await submit(bookingForm());
+        const newer = await submit(bookingForm());
+        const all = await request(app).get('/api/admin/bookings?scope=all').set(adminAuth);
+        const ids = all.body.bookings.map(b => b.id);
+        expect(ids.indexOf(newer.body.id)).toBeLessThan(ids.indexOf(older.body.id));
+        expect(typeof all.body.pendingCount).toBe('number');
+
+        const one = await request(app).get(`/api/admin/bookings/${older.body.id}`).set(adminAuth);
+        expect(one.status).toBe(200);
+        expect(one.body.booking.id).toBe(older.body.id);
+        expect((await request(app).get('/api/admin/bookings/999999').set(adminAuth)).status).toBe(404);
+        expect((await request(app).get(`/api/admin/bookings/${older.body.id}`).set(auth)).status).toBe(401);
+    });
+});
+
+describe('Upload cleanup robustness', () => {
+    it('does not crash on folders or files that vanish', () => {
+        const dir = path.join(uploadsDir, 'a-folder');
+        fs.mkdirSync(dir, { recursive: true });
+        const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+        fs.utimesSync(dir, old, old);
+        const gone = store.create({
+            eventName: 'Gone', eventSpace: 'fleck-atrium', registrationTime: '09:00', startTime: '09:00',
+            endTime: '10:00', shutdownTime: '10:00', contactName: 'A', contactEmail: 'a@example.com',
+            recordingOption: 'none', eventDate: addDays(todayInToronto(), -300), uploadFile: 'never-existed.png'
+        }).booking;
+        try {
+            expect(() => purgeOldUploads()).not.toThrow();
+            expect(fs.existsSync(dir)).toBe(true);
+            expect(store.get(gone.id).uploadFile).toBeNull();
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});
+
+// Last: these wrong passwords count against this test run's IP.
+describe('Failed-login limit', () => {
+    it('blocks repeated wrong passwords but never a correct login', async () => {
+        const wrong = basic('nobody', 'wrong');
+        let last;
+        for (let i = 0; i < 31; i++) last = await request(app).get('/').set(wrong);
+        expect(last.status).toBe(429);
+        expect((await request(app).get('/').set(auth)).status).toBe(200);
+        // A first visit with no credentials still gets the login prompt, not a block
+        expect((await request(app).get('/')).status).toBe(401);
     });
 });

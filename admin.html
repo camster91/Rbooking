@@ -238,7 +238,12 @@
                 : `<div class="empty">${q ? 'No bookings match your search.' : TABS[currentTab].empty}</div>`;
         }
 
+        // Bumped on every load so a slow reply for an earlier tab can't
+        // replace the list for the tab now selected.
+        let loadRequest = 0;
+
         async function load(tab, focusId) {
+            const requestId = ++loadRequest;
             currentTab = tab;
             document.querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
             const { scope, status } = TABS[tab];
@@ -246,23 +251,28 @@
             try {
                 const res = await fetch(`api/admin/bookings?scope=${scope}${status ? `&status=${status}` : ''}`, { cache: 'no-store' });
                 if (!res.ok) throw new Error(`Server returned ${res.status}`);
-                bookings = (await res.json()).bookings;
+                const data = await res.json();
+                if (requestId !== loadRequest) return;
+                bookings = data.bookings;
+                // A linked booking may be outside this list (e.g. older ones): fetch it on its own.
+                if (focusId && !bookings.some(b => b.id === focusId)) {
+                    const one = await fetch(`api/admin/bookings/${focusId}`, { cache: 'no-store' });
+                    if (one.ok && requestId === loadRequest) bookings = [(await one.json()).booking, ...bookings];
+                }
+                if (requestId !== loadRequest) return;
                 render();
-                refreshReviewCount();
+                showReviewCount(data.pendingCount);
                 if (focusId) highlight(focusId);
             } catch (err) {
+                if (requestId !== loadRequest) return;
                 listEl.innerHTML = `<div class="error">Could not load bookings (${esc(err.message)}). Refresh to try again.</div>`;
             }
         }
 
-        async function refreshReviewCount() {
+        function showReviewCount(n) {
             const el = document.getElementById('review-count');
-            try {
-                const res = await fetch('api/admin/bookings?scope=upcoming&status=pending', { cache: 'no-store' });
-                const n = (await res.json()).bookings.length;
-                el.textContent = n;
-                el.hidden = n === 0;
-            } catch { el.hidden = true; }
+            el.textContent = n;
+            el.hidden = !n;
         }
 
         function highlight(id) {

@@ -18,6 +18,7 @@ export default [
                 Buffer: 'readonly',
                 setTimeout: 'readonly',
                 setInterval: 'readonly',
+                URL: 'readonly',
                 // Browser globals
                 document: 'readonly',
                 window: 'readonly',

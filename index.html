@@ -673,17 +673,24 @@
         // ---- Availability ---------------------------------------------------
         // Bookings that already hold the chosen space on the chosen day.
         let takenSlots = [];
+        // Bumped on every lookup so a slow reply for an earlier date or space
+        // can't overwrite the answer for the current one.
+        let availabilityRequest = 0;
 
         async function loadAvailability() {
+            const requestId = ++availabilityRequest;
             takenSlots = [];
             const date = datePicker.selectedDates[0];
             const space = checkedValue('event-space');
             if (!date || !space) { renderAvailability(); return; }
+            let slots = [];
             try {
                 const iso = flatpickr.formatDate(date, 'Y-m-d');
                 const res = await fetch(`api/availability?date=${iso}&space=${encodeURIComponent(space)}`);
-                if (res.ok) takenSlots = (await res.json()).bookings;
+                if (res.ok) slots = (await res.json()).bookings;
             } catch { /* availability is a hint only - the server checks again on submit */ }
+            if (requestId !== availabilityRequest) return;
+            takenSlots = slots;
             renderAvailability();
             checkClash();
         }
