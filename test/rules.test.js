@@ -25,12 +25,18 @@ describe('validateEmail', () => {
     it('accepts plain addresses', () => {
         expect(validateEmail('user@example.com')).toBe(true);
         expect(validateEmail('test@utoronto.ca')).toBe(true);
+        expect(validateEmail('first.last+av@mail.rotman.utoronto.ca')).toBe(true);
     });
 
     it('rejects bad and quoted addresses', () => {
         expect(validateEmail('"x\r\nATTACH:http://evil"@example.com')).toBe(false);
         expect(validateEmail('"two words"@example.com')).toBe(false);
         expect(validateEmail('invalid')).toBe(false);
+        expect(validateEmail('a@b')).toBe(false);
+        expect(validateEmail('a..b@example.com')).toBe(false);
+        expect(validateEmail('a@-bad.com')).toBe(false);
+        expect(validateEmail('a@example.c0m')).toBe(false);
+        expect(validateEmail('a@[127.0.0.1]')).toBe(false);
         expect(validateEmail('')).toBe(false);
         expect(validateEmail(null)).toBe(false);
     });

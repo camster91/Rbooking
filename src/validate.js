@@ -1,5 +1,4 @@
 // Input rules shared by the booking API. Pure functions, no I/O.
-import isEmail from 'validator/es/lib/isEmail.js';
 
 export const TIME_ZONE = 'America/Toronto';
 export const EVENT_SPACES = ['full', 'one-third', 'two-thirds', 'fleck-atrium'];
@@ -29,13 +28,23 @@ export function timesOverlap(a, b) {
     return a.registrationTime < b.shutdownTime && b.registrationTime < a.shutdownTime;
 }
 
-// validator's isEmail alone accepts quoted addresses that can hold spaces and
-// line breaks ("a\r\nb"@x.com), which would break the calendar invite and
-// mail headers. Only allow plain addresses.
-const PLAIN_EMAIL = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/;
+// Plain addresses only: no quoted local parts (they can hold spaces and line
+// breaks that would break mail headers and the calendar invite), no IP-literal
+// domains, and a real-looking domain with a letters-only top-level part.
+const LOCAL_PART = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;
+const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 export function validateEmail(email) {
-    return typeof email === 'string' && PLAIN_EMAIL.test(email) && isEmail(email);
+    if (typeof email !== 'string' || email.length > 254) return false;
+    const at = email.lastIndexOf('@');
+    if (at < 1) return false;
+    const local = email.slice(0, at);
+    const labels = email.slice(at + 1).split('.');
+    return local.length <= 64
+        && LOCAL_PART.test(local)
+        && labels.length >= 2
+        && labels.every(label => DOMAIN_LABEL.test(label))
+        && /^[A-Za-z]{2,63}$/.test(labels[labels.length - 1]);
 }
 
 const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
