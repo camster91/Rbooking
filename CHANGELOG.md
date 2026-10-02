@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.0.0 — 2026-10-02
+
+**Moved to Cloudflare Workers** (free plan). The Node.js/Express server and Docker image are removed; they remain in git history up to v1.2.2.
+
+### Changed
+- App code is a Worker (`src/`); pages are served from `public/` after the login check.
+- Bookings are stored in **D1**; the clash check and the save run as one SQL statement, so two requests can't take the same slot.
+- Uploaded files go straight into **R2** as a stream (`PUT /api/uploads`), then the booking refers to them by key. Staff open them at `/uploads/<key>`.
+- Email is sent through your SMTP server (Titan) with a small built-in client over Cloudflare TCP sockets. It refuses to send the password without TLS.
+- Rate limits use Cloudflare's rate-limit binding: 10 bookings/uploads and 10 wrong passwords per minute per IP.
+- Daily upload cleanup runs as a Cron trigger.
+- There are no built-in passwords any more: until `AUTH_PASS` and `ADMIN_PASS` are set, the app answers "Not set up yet".
+- Tests run inside the Workers runtime (Vitest + `@cloudflare/vitest-plugin`) against local D1 and R2.
+
+### Added
+- **Settings** on the admin page: where new requests go, which email domains may book (stops the form being used to email anyone), the daily upload limit, and the booking form password. Saved in D1 (migration `0003_settings.sql`); the password is salted and hashed.
+
+### Security
+- Pages can't be shown inside another website (`X-Frame-Options`, `frame-ancestors`), so a hidden frame can't trick staff into clicking Approve. Responses also send `nosniff` and `Referrer-Policy: same-origin`.
+- Uploads are capped per day (`UPLOAD_DAILY_LIMIT_MB`, default 1 GB), so a leaked login can't fill file storage. Needs migration `0002_upload_log.sql`.
+
+### Removed
+- `TRUST_PROXY` and `SUBMIT_RATE_LIMIT` settings (Cloudflare gives the real visitor IP).
+
 ## v1.2.2 — 2026-10-02
 
 UI review fixes. All pages now pass an automated accessibility check (axe, WCAG 2 AA).

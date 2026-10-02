@@ -1,113 +1,15 @@
-// Email transport, calendar invites (ICS) and email templates.
-const nodemailer = require('nodemailer');
-const escapeHtml = require('escape-html');
+// Email templates and calendar invites (ICS). Pure functions: sending is in
+// mailer.js. Every user value goes through sanitizeForEmail or the ICS escapers.
 
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+// Addresses used in templates; set from the Worker environment per request.
+const cfg = {
+    staffEmail: 'requests@rotmanav.ca',
+    organizer: 'requests@rotmanav.ca'
+};
 
-// Email transporter - initialized async (see initializeEmailTransporter)
-let transporter = null;
-// One of: 'uninitialized' | 'test' | 'smtp' | 'ethereal' | 'console'
-let emailMode = 'uninitialized';
-// Every message sent in test mode, so tests can inspect them.
-const sentMail = [];
-
-function getEmailStatus() {
-    return {
-        mode: emailMode,
-        configured: Boolean(transporter),
-        // In production anything other than real SMTP means bookings are not delivered
-        degraded: IS_PRODUCTION && emailMode !== 'smtp'
-    };
-}
-
-async function initializeEmailTransporter() {
-    // Password from env var (works better with special chars than .env)
-    const smtpPassword = process.env.SMTP_PASSWORD || process.env.TITAN_PASSWORD;
-
-    // Use console logging in test environment
-    if (process.env.NODE_ENV === 'test') {
-        emailMode = 'test';
-        transporter = {
-            sendMail: async (options) => {
-                sentMail.push(options);
-                return { messageId: 'test-' + Date.now() };
-            }
-        };
-        return;
-    }
-
-    // Production SMTP
-    if (process.env.SMTP_HOST && smtpPassword) {
-        try {
-            transporter = nodemailer.createTransport({
-                host: process.env.SMTP_HOST,
-                port: parseInt(process.env.SMTP_PORT, 10) || 587,
-                secure: process.env.SMTP_SECURE === 'true',
-                auth: {
-                    user: process.env.SMTP_USERNAME,
-                    pass: smtpPassword
-                }
-            });
-            console.log('Using production SMTP:', process.env.SMTP_HOST);
-
-            // Verify SMTP connection
-            await transporter.verify();
-            console.log('SMTP connection verified successfully');
-            emailMode = 'smtp';
-            return;
-        } catch (smtpError) {
-            // In production a failed SMTP connection means every booking email
-            // would be silently lost - refuse to start instead.
-            if (IS_PRODUCTION) {
-                throw new Error(`SMTP connection failed (${smtpError.message}) - refusing to start in production`);
-            }
-            console.error('SMTP configuration error:', smtpError.message);
-            console.log('Falling back to Ethereal test email (development only)...');
-            transporter = null;
-        }
-    } else if (IS_PRODUCTION) {
-        throw new Error('SMTP_HOST and SMTP_PASSWORD are required in production - refusing to start without a real mail transport');
-    }
-
-    // Development fallback: the Ethereal test inbox. Messages there are thrown
-    // away within hours - fine for development, catastrophic for bookings.
-    try {
-        const testAccount = await nodemailer.createTestAccount();
-        transporter = nodemailer.createTransport({
-            host: 'smtp.ethereal.email',
-            port: 587,
-            secure: false,
-            auth: {
-                user: testAccount.user,
-                pass: testAccount.pass
-            }
-        });
-        emailMode = 'ethereal';
-        console.warn('WARNING: using the Ethereal TEST inbox - email is NOT really delivered. Preview at https://ethereal.email');
-    } catch {
-        emailMode = 'console';
-        console.warn('WARNING: no email service available - booking emails will only be logged to the console');
-        transporter = {
-            sendMail: async (options) => {
-                console.log('\n========== EMAIL PREVIEW ==========');
-                console.log('To:', options.to);
-                console.log('From:', options.from);
-                console.log('Subject:', options.subject);
-                console.log('====================================\n');
-                return { messageId: 'console-' + Date.now() };
-            }
-        };
-    }
-}
-
-async function sendMail(options) {
-    const info = await transporter.sendMail({
-        from: `"Rotman AV" <${process.env.SMTP_USERNAME || 'noreply@rotmanav.ca'}>`,
-        ...options
-    });
-    const previewUrl = nodemailer.getTestMessageUrl(info);
-    if (previewUrl) console.log('Preview email at:', previewUrl);
-    return info;
+export function configureMail(env) {
+    cfg.staffEmail = env.EMAIL_TO || 'requests@rotmanav.ca';
+    cfg.organizer = env.SMTP_USERNAME || cfg.staffEmail;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +51,7 @@ function formatTime(time) {
 // Sanitize user input for email HTML
 function sanitizeForEmail(input) {
     if (!input) return '';
-    return escapeHtml(String(input));
+    return String(input).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // ---------------------------------------------------------------------------
@@ -172,14 +74,16 @@ function escapeICalParam(value) {
         .replace(/[\r\n]+/g, ' ');
 }
 
+const utf8Length = (str) => new TextEncoder().encode(str).length;
+
 // RFC 5545 3.1: content lines longer than 75 octets must be folded with CRLF + space.
 function foldICalLine(line) {
-    if (Buffer.byteLength(line, 'utf8') <= 75) return line;
+    if (utf8Length(line) <= 75) return line;
     const folded = [];
     let current = '';
     let currentBytes = 0;
     for (const char of line) {
-        const charBytes = Buffer.byteLength(char, 'utf8');
+        const charBytes = utf8Length(char);
         if (currentBytes + charBytes > 75) {
             folded.push(current);
             current = ' ';
@@ -249,7 +153,7 @@ function generateICS(booking, method = 'REQUEST') {
         `LOCATION:${escapeICalText(`${space} - Rotman School of Management`)}`,
         `STATUS:${status}`,
         `SEQUENCE:${booking.sequence}`,
-        `ORGANIZER;CN="${escapeICalParam('Rotman AV Services')}":mailto:${safeMailto(process.env.SMTP_USERNAME || 'requests@rotmanav.ca')}`,
+        `ORGANIZER;CN="${escapeICalParam('Rotman AV Services')}":mailto:${safeMailto(cfg.organizer)}`,
         `ATTENDEE;CN="${escapeICalParam(booking.contactName)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${safeMailto(booking.contactEmail)}`,
         'END:VEVENT',
         'END:VCALENDAR'
@@ -366,7 +270,7 @@ function conflictWarning(conflicts) {
 // Staff: a new request came in. Includes a tentative calendar invite.
 function newBookingStaffEmail(booking, { conflicts = [], adminUrl, uploadUrl }) {
     return {
-        to: process.env.EMAIL_TO || 'requests@rotmanav.ca',
+        to: cfg.staffEmail,
         replyTo: booking.contactEmail,
         subject: `📅 New request #${booking.id}: ${booking.eventName} - ${formatDate(booking.eventDate)}`,
         html: layout('New Booking Request', `Request #${booking.id} is waiting for review`,
@@ -381,7 +285,7 @@ function newBookingStaffEmail(booking, { conflicts = [], adminUrl, uploadUrl }) 
 function receivedRequesterEmail(booking) {
     return {
         to: booking.contactEmail,
-        replyTo: process.env.EMAIL_TO || 'requests@rotmanav.ca',
+        replyTo: cfg.staffEmail,
         subject: `We received your AV booking request #${booking.id}`,
         html: layout('Request Received', 'Thanks - the AV team will review it shortly',
             `<p style="margin-top: 0;">Hi ${sanitizeForEmail(booking.contactName)},</p>
@@ -405,7 +309,7 @@ function statusRequesterEmail(booking, previousStatus) {
         : '';
     const mail = {
         to: booking.contactEmail,
-        replyTo: process.env.EMAIL_TO || 'requests@rotmanav.ca',
+        replyTo: cfg.staffEmail,
         subject: `AV booking #${booking.id} ${booking.status}: ${booking.eventName}`,
         html: layout(msg.title, msg.subtitle,
             `<p style="margin-top: 0;">Hi ${sanitizeForEmail(booking.contactName)},</p><p>${msg.text}</p>${note}`
@@ -422,7 +326,7 @@ function statusRequesterEmail(booking, previousStatus) {
 function statusStaffEmail(booking, { adminUrl }) {
     const method = booking.status === 'approved' ? 'REQUEST' : 'CANCEL';
     return {
-        to: process.env.EMAIL_TO || 'requests@rotmanav.ca',
+        to: cfg.staffEmail,
         subject: `Booking #${booking.id} ${booking.status}: ${booking.eventName} - ${formatDate(booking.eventDate)}`,
         html: layout(`Booking #${booking.id} ${STATUS_LABELS[booking.status].toLowerCase()}`, 'Calendar update attached',
             bookingDetails(booking, { forStaff: true }) + button(adminUrl, 'Open admin')),
@@ -430,11 +334,7 @@ function statusStaffEmail(booking, { adminUrl }) {
     };
 }
 
-module.exports = {
-    initializeEmailTransporter,
-    getEmailStatus,
-    sendMail,
-    sentMail,
+export {
     formatEventSpace,
     formatRecordingOption,
     formatDate,

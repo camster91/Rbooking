@@ -1,0 +1,66 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "rbooking",
+	"main": "src/index.js",
+	"compatibility_date": "2026-09-30",
+
+	// Lives at rotmanav.ca/book (the rest of rotmanav.ca is untouched).
+	// Two patterns so /bookings, /booklet etc. are not caught.
+	"routes": [
+		{ "pattern": "rotmanav.ca/book", "zone_name": "rotmanav.ca" },
+		{ "pattern": "rotmanav.ca/book/*", "zone_name": "rotmanav.ca" }
+	],
+	"workers_dev": false,
+
+	// The Worker runs first on every request so it can check the login before
+	// serving a page from public/.
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+
+	// Bookings. Create with: npx wrangler d1 create rbooking
+	// then paste the database_id it prints here.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "rbooking",
+			"database_id": "27d6d5d7-5bbc-4c91-b180-9ed05c323273",
+			"migrations_dir": "migrations"
+		}
+	],
+
+	// Uploaded files. Create with: npx wrangler r2 bucket create rbooking-uploads
+	"r2_buckets": [
+		{
+			"binding": "UPLOADS",
+			"bucket_name": "rbooking-uploads"
+		}
+	],
+
+	// Per-IP limits: bookings/uploads, and wrong passwords.
+	"ratelimits": [
+		{ "name": "SUBMIT_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+		{ "name": "LOGIN_LIMITER", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }
+	],
+
+	// Daily upload cleanup (09:17 UTC).
+	"triggers": { "crons": ["17 9 * * *"] },
+
+	// Non-secret settings. Secrets (AUTH_PASS, ADMIN_PASS, SMTP_PASSWORD) are
+	// set with: npx wrangler secret put <NAME>
+	"vars": {
+		"BASE_PATH": "/book",
+		"AUTH_USER": "admin",
+		"ADMIN_USER": "av-admin",
+		"EMAIL_TO": "requests@rotmanav.ca",
+		"SMTP_HOST": "smtp.titan.email",
+		"SMTP_PORT": "587",
+		"SMTP_USERNAME": "requests@rotmanav.ca",
+		"UPLOAD_RETENTION_DAYS": "90",
+		"UPLOAD_DAILY_LIMIT_MB": "1024"
+	},
+
+	"observability": { "enabled": true }
+}

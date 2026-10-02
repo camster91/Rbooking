@@ -8,6 +8,8 @@ email_log.txt
 # Environment and credentials
 .env
 *.env
+.dev.vars
+.wrangler/
 credentials.*
 config.local.php
 
@@ -17,13 +19,6 @@ npm-debug.log*
 
 # Test coverage
 coverage/
-
-# Bookings database
-data/
-
-# Uploads (user content)
-uploads/*
-!uploads/.gitkeep
 
 # IDE and OS files
 .DS_Store

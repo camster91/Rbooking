@@ -1,0 +1,6 @@
+# Copy to .dev.vars for `npm run dev` (never commit .dev.vars).
+AUTH_PASS=dev-form-password
+ADMIN_PASS=dev-admin-password
+# log = print emails instead of sending. Remove to send through SMTP_HOST,
+# which also needs SMTP_PASSWORD here.
+MAIL_MODE=log

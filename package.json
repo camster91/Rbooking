@@ -1,46 +1,24 @@
 {
   "name": "rbooking",
-  "version": "1.2.2",
-  "description": "Rotman AV event booking: booking form, admin page and email notifications",
-  "main": "app.js",
-  "engines": {
-    "node": ">=20.0.0"
-  },
+  "version": "2.0.0",
+  "private": true,
+  "description": "Rotman AV event booking on Cloudflare Workers: booking form, admin page and email notifications",
+  "type": "module",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply rbooking --remote",
+    "db:migrate:local": "wrangler d1 migrations apply rbooking --local",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
-  "dependencies": {
-    "better-sqlite3": "^12.11.1",
-    "dotenv": "^16.3.1",
-    "escape-html": "^1.0.3",
-    "express": "^4.18.2",
-    "express-rate-limit": "^8.2.1",
-    "formidable": "^3.5.4",
-    "ical-generator": "^10.1.0",
-    "multer": "^2.0.2",
-    "nodemailer": "^10.0.10",
-    "validator": "^13.15.26"
-  },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.3.6",
+    "@eslint/js": "^9.39.5",
     "eslint": "^9.39.2",
-    "jest": "^30.2.0",
-    "supertest": "^7.2.2"
-  },
-  "overrides": {
-    "qs": "^6.16.0"
-  },
-  "jest": {
-    "setupFiles": [
-      "./jest.setup.js"
-    ],
-    "testPathIgnorePatterns": [
-      "/node_modules/"
-    ]
+    "vitest": "~4.1.11",
+    "wrangler": "^4.147.0"
   }
 }

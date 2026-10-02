@@ -34,6 +34,9 @@
         header p { margin: 4px 0 0; opacity: 0.8; font-size: 0.9rem; }
         .header-link { color: white; text-decoration: none; font-weight: 600; font-size: 0.9rem; background: rgba(255,255,255,0.1); padding: 8px 14px; border-radius: 10px; }
         .header-link:hover { background: rgba(255,255,255,0.18); }
+        .header-links { display: flex; gap: 8px; flex-wrap: wrap; }
+        button.header-link { border: none; font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+        .header-link:focus-visible { outline: 2px solid white; outline-offset: 2px; }
 
         .toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: 20px 0; }
         .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -92,7 +95,12 @@
         dialog h3 { margin: 0 0 6px; }
         dialog p { margin: 0 0 14px; color: var(--muted); font-size: 0.92rem; }
         dialog label { display: block; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
-        dialog textarea { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: white; font: inherit; resize: vertical; }
+        dialog textarea, dialog input:not([type="checkbox"]) { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: white; font: inherit; resize: vertical; }
+        dialog textarea:focus, dialog input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+        #settings-dialog { width: min(520px, calc(100vw - 32px)); }
+        .field { margin-bottom: 16px; }
+        .field .hint { margin: 6px 0 0; font-size: 0.82rem; color: var(--muted); }
+        .field .check { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 0.88rem; color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 500; }
         .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
         .dialog-error { color: #fca5a5; font-size: 0.9rem; margin-top: 10px; }
 
@@ -115,7 +123,10 @@
                 <h1>AV Bookings</h1>
                 <p>Review, approve and cancel event requests</p>
             </div>
-            <a class="header-link" href="./">Open booking form</a>
+            <div class="header-links">
+                <button type="button" class="header-link" id="settings-open">Settings</button>
+                <a class="header-link" href="./">Open booking form</a>
+            </div>
         </header>
 
         <div class="toolbar">
@@ -141,6 +152,37 @@
             <div class="dialog-actions">
                 <button type="button" class="btn btn-cancel" id="dialog-close">Back</button>
                 <button type="submit" class="btn btn-primary" id="dialog-confirm"></button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+        <form method="dialog" id="settings-form">
+            <h3 id="settings-title">Settings</h3>
+            <p>Changes apply right away.</p>
+            <div class="field">
+                <label for="set-email-to">Send new requests to</label>
+                <input id="set-email-to" type="email" required maxlength="254" autocomplete="off">
+            </div>
+            <div class="field">
+                <label for="set-domains">Requester email must end in</label>
+                <input id="set-domains" type="text" maxlength="1000" placeholder="Any address" aria-describedby="set-domains-hint" autocomplete="off">
+                <p class="hint" id="set-domains-hint">For example: utoronto.ca. Separate several with commas. Leave empty to allow any address.</p>
+            </div>
+            <div class="field">
+                <label for="set-upload-limit">Daily upload limit (MB)</label>
+                <input id="set-upload-limit" type="number" min="1" max="10240" step="1" required>
+            </div>
+            <div class="field">
+                <label for="set-form-password">New booking form password</label>
+                <input id="set-form-password" type="password" minlength="12" maxlength="200" autocomplete="new-password" placeholder="Leave empty to keep the current one" aria-describedby="set-password-hint">
+                <p class="hint" id="set-password-hint"></p>
+                <label class="check" id="set-use-cf-row" hidden><input type="checkbox" id="set-use-cf"> Go back to the password set in Cloudflare</label>
+            </div>
+            <div class="dialog-error" id="settings-error" role="alert" hidden></div>
+            <div class="dialog-actions">
+                <button type="button" class="btn btn-cancel" id="settings-close">Close</button>
+                <button type="submit" class="btn btn-primary" id="settings-save">Save</button>
             </div>
         </form>
     </dialog>
@@ -350,6 +392,71 @@
                 e.preventDefault();
                 const id = Number(jump.dataset.jump);
                 if (!highlight(id)) load('all', id);
+            }
+        });
+
+        // Settings dialog
+        const settingsDialog = document.getElementById('settings-dialog');
+        const settingsError = document.getElementById('settings-error');
+        const settingsSave = document.getElementById('settings-save');
+        const field = (id) => document.getElementById(id);
+
+        function showSettings(s) {
+            field('set-email-to').value = s.emailTo;
+            field('set-domains').value = s.allowedEmailDomains;
+            field('set-upload-limit').value = s.uploadDailyLimitMb;
+            field('set-form-password').value = '';
+            field('set-use-cf').checked = false;
+            field('set-use-cf-row').hidden = s.formPassword !== 'app';
+            field('set-password-hint').textContent = s.formPassword === 'app'
+                ? 'The current password was set here. At least 12 characters.'
+                : 'The current password is the one set in Cloudflare. At least 12 characters.';
+        }
+
+        field('settings-open').addEventListener('click', async () => {
+            settingsError.hidden = true;
+            try {
+                const res = await fetch('api/admin/settings', { cache: 'no-store' });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) throw new Error(data.message || `Server returned ${res.status}`);
+                showSettings(data.settings);
+                settingsDialog.showModal();
+                field('set-email-to').focus();
+            } catch (err) {
+                toast(`Could not load settings (${err.message})`);
+            }
+        });
+
+        field('settings-close').addEventListener('click', () => settingsDialog.close());
+
+        document.getElementById('settings-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            settingsSave.disabled = true;
+            settingsError.hidden = true;
+            const body = {
+                emailTo: field('set-email-to').value,
+                allowedEmailDomains: field('set-domains').value,
+                uploadDailyLimitMb: Number(field('set-upload-limit').value)
+            };
+            if (field('set-use-cf').checked) body.useCloudflarePassword = true;
+            else if (field('set-form-password').value) body.formPassword = field('set-form-password').value;
+            try {
+                const res = await fetch('api/admin/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const result = await res.json().catch(() => ({}));
+                if (!res.ok || !result.success) throw new Error(result.message || `Server returned ${res.status}`);
+                settingsDialog.close();
+                toast(body.formPassword || body.useCloudflarePassword
+                    ? 'Settings saved. The booking form password has changed - let staff know.'
+                    : 'Settings saved.');
+            } catch (err) {
+                settingsError.textContent = err.message;
+                settingsError.hidden = false;
+            } finally {
+                settingsSave.disabled = false;
             }
         });
 
