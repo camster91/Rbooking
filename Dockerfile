@@ -1,4 +1,4 @@
-# Rotman AV Event Booking System - Dockerfile
+# rbooking - Dockerfile
 
 # Use Node.js LTS Alpine for smaller image
 FROM node:22-alpine
