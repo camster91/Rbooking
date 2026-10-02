@@ -14,7 +14,9 @@ export default defineConfig({
                     AUTH_PASS: 'test-pass',
                     ADMIN_USER: 'test-admin',
                     ADMIN_PASS: 'test-admin-pass',
-                    MAIL_MODE: 'test'
+                    MAIL_MODE: 'test',
+                    // Tests call the app at the root; the /book prefix has its own tests
+                    BASE_PATH: ''
                 }
             }
         }))
