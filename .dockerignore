@@ -7,3 +7,4 @@ uploads/*
 !uploads/.gitkeep
 .git
 __tests__
+data

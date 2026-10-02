@@ -16,6 +16,8 @@ export default [
                 __filename: 'readonly',
                 console: 'readonly',
                 Buffer: 'readonly',
+                setTimeout: 'readonly',
+                setInterval: 'readonly',
                 // Browser globals
                 document: 'readonly',
                 window: 'readonly',

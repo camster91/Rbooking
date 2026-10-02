@@ -1,26 +1,30 @@
 require('dotenv').config();
 
-// Password from env var (works better with special chars than .env)
-const smtpPassword = process.env.SMTP_PASSWORD || process.env.TITAN_PASSWORD;
 const express = require('express');
 const multer = require('multer');
-const nodemailer = require('nodemailer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
-const escapeHtml = require('escape-html');
 const validator = require('validator');
+
+const { openBookingStore, BookingError } = require('./lib/bookings');
+const mail = require('./lib/mail');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const TIME_ZONE = 'America/Toronto';
 
-// Basic Auth — protects all pages.
-// The fallback password is published in this repo's docs and history, so a
-// production deployment must refuse to run on it.
+// ---------------------------------------------------------------------------
+// Logins. Two levels:
+//   - AUTH_USER / AUTH_PASS: shared login for the booking form
+//   - ADMIN_USER / ADMIN_PASS: AV staff - the admin page and uploaded files
+// The fallback passwords are published in this repo, so production refuses them.
 const AUTH_USER = process.env.AUTH_USER || 'admin';
 const AUTH_PASS = process.env.AUTH_PASS || (!IS_PRODUCTION ? 'rotman2025' : null);
+const ADMIN_USER = process.env.ADMIN_USER || 'av-admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || (!IS_PRODUCTION ? 'rotman-admin-dev' : null);
 
 if (!AUTH_PASS || AUTH_PASS === 'rotman2025') {
     if (IS_PRODUCTION) {
@@ -29,6 +33,16 @@ if (!AUTH_PASS || AUTH_PASS === 'rotman2025') {
     }
     console.warn('WARNING: AUTH_PASS not set - using the known development default. Never deploy this.');
 }
+if (!ADMIN_PASS || ADMIN_PASS === 'rotman-admin-dev') {
+    if (IS_PRODUCTION) {
+        console.error('FATAL: set ADMIN_PASS to a strong password. NODE_ENV=production refuses the known default.');
+        process.exit(1);
+    }
+    console.warn('WARNING: ADMIN_PASS not set - using the known development default. Never deploy this.');
+}
+if (ADMIN_USER === AUTH_USER) {
+    console.warn('WARNING: ADMIN_USER is the same as AUTH_USER - pick a different admin username.');
+}
 
 function constantTimeEqual(a, b) {
     const bufA = Buffer.from(String(a));
@@ -36,25 +50,38 @@ function constantTimeEqual(a, b) {
     return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
 }
 
-function basicAuth(req, res, next) {
+// Returns 'admin', 'user' or null for the request's Basic Auth credentials.
+function loginRole(req) {
     const hdr = req.headers.authorization || '';
-    if (hdr.slice(0, 6).toLowerCase() === 'basic ') {
-        const decoded = Buffer.from(hdr.slice(6), 'base64').toString();
-        // Per RFC 7617 the password is everything after the FIRST colon (a
-        // password may itself contain colons).
-        const colon = decoded.indexOf(':');
-        const user = colon === -1 ? decoded : decoded.slice(0, colon);
-        const pass = colon === -1 ? '' : decoded.slice(colon + 1);
-        if (constantTimeEqual(user, AUTH_USER) && constantTimeEqual(pass, AUTH_PASS)) return next();
-    }
-    res.set('WWW-Authenticate', 'Basic realm="Rotman AV"');
+    if (hdr.slice(0, 6).toLowerCase() !== 'basic ') return null;
+    const decoded = Buffer.from(hdr.slice(6), 'base64').toString();
+    // Per RFC 7617 the password is everything after the FIRST colon (a
+    // password may itself contain colons).
+    const colon = decoded.indexOf(':');
+    const user = colon === -1 ? decoded : decoded.slice(0, colon);
+    const pass = colon === -1 ? '' : decoded.slice(colon + 1);
+    // Check both pairs every time so timing doesn't reveal which user exists.
+    const isAdmin = constantTimeEqual(user, ADMIN_USER) & constantTimeEqual(pass, ADMIN_PASS);
+    const isUser = constantTimeEqual(user, AUTH_USER) & constantTimeEqual(pass, AUTH_PASS);
+    if (isAdmin) return 'admin';
+    if (isUser) return 'user';
+    return null;
+}
+
+function challenge(res, realm) {
+    res.set('WWW-Authenticate', `Basic realm="${realm}"`);
     return res.status(401).send('Authentication required');
 }
 
-// Email transporter - initialized async (see initializeEmailTransporter)
-let transporter = null;
-// One of: 'uninitialized' | 'test' | 'smtp' | 'ethereal' | 'console'
-let emailMode = 'uninitialized';
+function basicAuth(req, res, next) {
+    req.role = loginRole(req);
+    return req.role ? next() : challenge(res, 'Rotman AV');
+}
+
+function adminAuth(req, res, next) {
+    // A different realm makes the browser ask again when a form user opens /admin.
+    return req.role === 'admin' ? next() : challenge(res, 'Rotman AV Admin');
+}
 
 // Behind a reverse proxy every request arrives from the proxy's IP, so the
 // rate limiter would lump all users together. Set TRUST_PROXY (e.g. 1 for one
@@ -64,35 +91,49 @@ if (process.env.TRUST_PROXY) {
     app.set('trust proxy', tp === 'true' ? true : (/^\d+$/.test(tp) ? Number(tp) : tp));
 }
 
+// ---------------------------------------------------------------------------
+// Storage
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'bookings.db');
+const store = openBookingStore(DB_FILE);
+
+const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 // Health check endpoint - public so the container healthcheck can reach it
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        email: {
-            mode: emailMode,
-            configured: Boolean(transporter),
-            // In production anything other than real SMTP means bookings are not delivered
-            degraded: IS_PRODUCTION && emailMode !== 'smtp'
-        }
+        email: mail.getEmailStatus()
     });
 });
 
-app.use(basicAuth);
+// Slow down password guessing: count only failed logins (401s) per IP.
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    requestWasSuccessful: (req, res) => res.statusCode !== 401,
+    skipSuccessfulRequests: true,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Too many failed logins. Please try again in 15 minutes.'
+});
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
+app.use(loginLimiter);
+app.use(basicAuth);
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadsDir),
     filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-        cb(null, uniqueName);
+        // Random prefix so file links can't be guessed
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_').slice(-80);
+        cb(null, `${crypto.randomBytes(12).toString('hex')}-${safeName}`);
     }
 });
 const upload = multer({
@@ -111,7 +152,7 @@ const upload = multer({
 // Rate limiting middleware
 const submitLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each IP to 10 requests per windowMs
+    max: parseInt(process.env.SUBMIT_RATE_LIMIT, 10) || 10, // requests per IP per window
     message: { success: false, message: 'Too many booking requests. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -120,85 +161,8 @@ const submitLimiter = rateLimit({
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(uploadsDir));
-
-async function initializeEmailTransporter() {
-    // Use console logging in test environment
-    if (process.env.NODE_ENV === 'test') {
-        console.log('Test environment - using console logging mode');
-        emailMode = 'test';
-        transporter = {
-            sendMail: async (options) => {
-                console.log('Email sent (test mode):', options.subject);
-                return { messageId: 'test-' + Date.now() };
-            }
-        };
-        return;
-    }
-
-    // Production SMTP
-    if (process.env.SMTP_HOST && smtpPassword) {
-        try {
-            transporter = nodemailer.createTransport({
-                host: process.env.SMTP_HOST,
-                port: parseInt(process.env.SMTP_PORT, 10) || 587,
-                secure: process.env.SMTP_SECURE === 'true',
-                auth: {
-                    user: process.env.SMTP_USERNAME,
-                    pass: smtpPassword
-                }
-            });
-            console.log('Using production SMTP:', process.env.SMTP_HOST);
-
-            // Verify SMTP connection
-            await transporter.verify();
-            console.log('SMTP connection verified successfully');
-            emailMode = 'smtp';
-            return;
-        } catch (smtpError) {
-            // In production a failed SMTP connection means every booking email
-            // would be silently lost - refuse to start instead.
-            if (IS_PRODUCTION) {
-                throw new Error(`SMTP connection failed (${smtpError.message}) - refusing to start in production`);
-            }
-            console.error('SMTP configuration error:', smtpError.message);
-            console.log('Falling back to Ethereal test email (development only)...');
-            transporter = null;
-        }
-    } else if (IS_PRODUCTION) {
-        throw new Error('SMTP_HOST and SMTP_PASSWORD are required in production - refusing to start without a real mail transport');
-    }
-
-    // Development fallback: the Ethereal test inbox. Messages there are thrown
-    // away within hours - fine for development, catastrophic for bookings.
-    try {
-        const testAccount = await nodemailer.createTestAccount();
-        transporter = nodemailer.createTransport({
-            host: 'smtp.ethereal.email',
-            port: 587,
-            secure: false,
-            auth: {
-                user: testAccount.user,
-                pass: testAccount.pass
-            }
-        });
-        emailMode = 'ethereal';
-        console.warn('WARNING: using the Ethereal TEST inbox - email is NOT really delivered. Preview at https://ethereal.email');
-    } catch {
-        emailMode = 'console';
-        console.warn('WARNING: no email service available - booking emails will only be logged to the console');
-        transporter = {
-            sendMail: async (options) => {
-                console.log('\n========== EMAIL PREVIEW ==========');
-                console.log('To:', options.to);
-                console.log('From:', options.from);
-                console.log('Subject:', options.subject);
-                console.log('====================================\n');
-                return { messageId: 'console-' + Date.now() };
-            }
-        };
-    }
-}
+// Uploaded files can hold anything people attach, so only staff can open them.
+app.use('/uploads', adminAuth, express.static(uploadsDir));
 
 // Serve the main page
 app.get('/', (req, res) => {
@@ -210,9 +174,18 @@ app.get('/thank-you', (req, res) => {
     res.sendFile(path.join(__dirname, 'thank_you.html'));
 });
 
-// Validation helper functions
+app.get('/admin', adminAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+// ---------------------------------------------------------------------------
+// Validation
+
+const EVENT_SPACES = ['full', 'one-third', 'two-thirds', 'fleck-atrium'];
+const RECORDING_OPTIONS = ['none', 'basic-recording', 'live-web-recording'];
+
 function validateEmail(email) {
-    return email && validator.isEmail(email);
+    return typeof email === 'string' && validator.isEmail(email);
 }
 
 const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -220,7 +193,7 @@ const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
 function validateTimeOrder(registration, start, end, shutdown) {
     const times = [registration, start, end, shutdown];
     if (times.some(t => !t)) return { valid: false, message: 'All time fields are required' };
-    if (times.some(t => !TIME_FORMAT.test(t))) {
+    if (times.some(t => typeof t !== 'string' || !TIME_FORMAT.test(t))) {
         return { valid: false, message: 'All times must be valid 24-hour HH:MM values (e.g. 09:00)' };
     }
 
@@ -239,6 +212,9 @@ function validateTimeOrder(registration, start, end, shutdown) {
     }
     if (endMin > shutdownMin) {
         return { valid: false, message: 'Presentation end time must be before shutdown time' };
+    }
+    if (regMin === shutdownMin) {
+        return { valid: false, message: 'Shutdown must be after registration opens' };
     }
 
     return { valid: true };
@@ -274,84 +250,43 @@ function parseEventDate(raw) {
     return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-// RFC 5545 TEXT escaping: backslash, semicolon, comma; embedded newlines
-// become a literal escape sequence so they can never forge new properties.
-function escapeICalText(value) {
-    return String(value ?? '')
-        .replace(/\\/g, '\\\\')
-        .replace(/;/g, '\\;')
-        .replace(/,/g, '\\,')
-        .replace(/\r\n|\r|\n/g, '\\n');
+// Today's date in Toronto as YYYY-MM-DD (en-CA formats dates that way).
+function todayInToronto(now = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(now);
 }
 
-// RFC 5545 param values cannot hold quotes or backslashes at all: strip them.
-function escapeICalParam(value) {
-    return String(value ?? '')
-        .replace(/["\\]/g, '')
-        .replace(/[\r\n]+/g, ' ');
+function addDays(isoDate, days) {
+    const [y, m, d] = isoDate.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
-// RFC 5545 3.1: content lines longer than 75 octets must be folded with CRLF + space.
-function foldICalLine(line) {
-    if (Buffer.byteLength(line, 'utf8') <= 75) return line;
-    const folded = [];
-    let current = '';
-    let currentBytes = 0;
-    for (const char of line) {
-        const charBytes = Buffer.byteLength(char, 'utf8');
-        if (currentBytes + charBytes > 75) {
-            folded.push(current);
-            current = ' ';
-            currentBytes = 1;
-        }
-        current += char;
-        currentBytes += charBytes;
+// Trim a text field and cap its length; non-strings become ''.
+function text(value, max) {
+    return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function baseUrl() {
+    return (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+}
+
+function removeUpload(file) {
+    if (file) fs.unlink(file.path, () => {});
+}
+
+// Send an email without failing the request: the booking is already saved
+// and visible on the admin page, so a mail error is logged, not fatal.
+async function trySend(options, label) {
+    try {
+        await mail.sendMail(options);
+        return true;
+    } catch (err) {
+        console.error(`Email failed (${label}):`, err.message);
+        return false;
     }
-    folded.push(current);
-    return folded.join('\r\n');
 }
 
-// Generate ICS calendar invite. eventDate must be a parseEventDate-validated
-// YYYY-MM-DD and the times validateTimeOrder-validated HH:MM strings.
-function generateICS(eventDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, otherNotes) {
-    const dateCompact = eventDate.replace(/-/g, '');
-    const startTime = eventStartTime.replace(':', '') + '00';
-    const endTime = shutdown.replace(':', '') + '00';
-    const eventId = `rotman-${Date.now()}@rotmanav.ca`;
-    const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-
-    let desc = `Event Space: ${formatEventSpace(eventSpace)}\nRecording: ${formatRecordingOption(recordingOption)}\n\nContact: ${personOfContact} (${emailAddress})`;
-    if (otherNotes) desc += `\n\nNotes: ${otherNotes}`;
-
-    const lines = [
-        'BEGIN:VCALENDAR',
-        'VERSION:2.0',
-        'PRODID:-//Rotman AV//Booking System//EN',
-        'CALSCALE:GREGORIAN',
-        'METHOD:REQUEST',
-        'BEGIN:VEVENT',
-        `UID:${eventId}`,
-        `DTSTAMP:${now}`,
-        `DTSTART:${dateCompact}T${startTime}`,
-        `DTEND:${dateCompact}T${endTime}`,
-        `SUMMARY:${escapeICalText(eventName || 'Untitled Event')}`,
-        `DESCRIPTION:${escapeICalText(desc)}`,
-        `LOCATION:${escapeICalText(`${formatEventSpace(eventSpace)} - Rotman School of Management`)}`,
-        'STATUS:CONFIRMED',
-        'SEQUENCE:0',
-        `ORGANIZER;CN="${escapeICalParam('Rotman AV Services')}":mailto:${process.env.SMTP_USERNAME || 'requests@rotmanav.ca'}`,
-        `ATTENDEE;CN="${escapeICalParam(personOfContact)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${emailAddress}`,
-        'END:VEVENT',
-        'END:VCALENDAR'
-    ];
-    return lines.map(foldICalLine).join('\r\n');
-}
-
-// Sanitize user input for email HTML
-function sanitizeForEmail(input) {
-    if (!input) return '';
-    return escapeHtml(String(input));
-}
+// ---------------------------------------------------------------------------
+// Public API
 
 // Run multer so its errors (file too big, wrong type) come back as JSON the
 // form can show, instead of Express's HTML error page.
@@ -365,206 +300,226 @@ function handleUpload(req, res, next) {
     });
 }
 
+// Times already taken on a date, for the form to show. Only the space and
+// times are shared - not who booked or what the event is.
+app.get('/api/availability', (req, res) => {
+    const date = parseEventDate(req.query.date);
+    if (!date) return res.status(400).json({ success: false, message: 'Please provide a valid date' });
+    const space = EVENT_SPACES.includes(req.query.space) ? req.query.space : null;
+    const probe = { id: null, eventDate: date, eventSpace: space, registrationTime: '00:00', shutdownTime: '24:00' };
+    const bookings = (space ? store.findConflicts(probe) : store.activeOnDate(date)).map(b => ({
+        space: b.eventSpace,
+        spaceName: mail.formatEventSpace(b.eventSpace),
+        from: b.registrationTime,
+        to: b.shutdownTime,
+        status: b.status
+    }));
+    res.json({ success: true, date, bookings });
+});
+
 // Handle form submission
 app.post('/api/submit', submitLimiter, handleUpload, async (req, res) => {
-    try {
-        const {
-            'event-space': eventSpace,
-            'person-of-contact': personOfContact,
-            'email-address': emailAddress,
-            'event-date': eventDate,
-            'event-name': eventName,
-            'registration-time': registrationTime,
-            'event-start-time': eventStartTime,
-            'presentation-end-time': presentationEndTime,
-            'shutdown': shutdown,
-            'cc-number': ccNumber,
-            'cfc-number': cfcNumber,
-            'recording-option': recordingOption,
-            'other-notes': otherNotes
-        } = req.body;
+    const fail = (status, message, extra = {}) => {
+        removeUpload(req.file);
+        return res.status(status).json({ success: false, message, ...extra });
+    };
 
-        // Validate email
-        if (!validateEmail(emailAddress)) {
-            return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+    try {
+        const body = req.body || {};
+        const input = {
+            eventName: text(body['event-name'], 200),
+            eventSpace: body['event-space'],
+            contactName: text(body['person-of-contact'], 200),
+            contactEmail: text(body['email-address'], 254),
+            registrationTime: body['registration-time'],
+            startTime: body['event-start-time'],
+            endTime: body['presentation-end-time'],
+            shutdownTime: body['shutdown'],
+            recordingOption: body['recording-option'],
+            ccNumber: text(body['cc-number'], 100) || null,
+            cfcNumber: text(body['cfc-number'], 100) || null,
+            notes: text(body['other-notes'], 5000) || null,
+            uploadFile: req.file ? req.file.filename : null
+        };
+
+        if (!validateEmail(input.contactEmail)) {
+            return fail(400, 'Please provide a valid email address');
+        }
+        if (!input.contactName) {
+            return fail(400, 'Please provide your name');
+        }
+        if (!input.eventName) {
+            return fail(400, 'Please provide an event name');
         }
 
         // Validate event date (accepts both the UI's "May 1, 2026" and ISO YYYY-MM-DD)
-        const isoDate = parseEventDate(eventDate);
-        if (!isoDate) {
-            return res.status(400).json({ success: false, message: 'Please provide a valid event date' });
+        input.eventDate = parseEventDate(body['event-date']);
+        if (!input.eventDate) {
+            return fail(400, 'Please provide a valid event date');
+        }
+        if (input.eventDate < todayInToronto()) {
+            return fail(400, 'The event date is in the past - please pick today or a later date');
+        }
+
+        if (!EVENT_SPACES.includes(input.eventSpace)) {
+            return fail(400, 'Please choose an event space');
+        }
+        if (!RECORDING_OPTIONS.includes(input.recordingOption)) {
+            return fail(400, 'Please choose a recording option');
         }
 
         // Validate time format and order
-        const timeValidation = validateTimeOrder(registrationTime, eventStartTime, presentationEndTime, shutdown);
+        const timeValidation = validateTimeOrder(input.registrationTime, input.startTime, input.endTime, input.shutdownTime);
         if (!timeValidation.valid) {
-            return res.status(400).json({ success: false, message: timeValidation.message });
+            return fail(400, timeValidation.message);
         }
 
-        // Sanitize inputs for email HTML
-        const sanitized = {
-            eventName: sanitizeForEmail(eventName),
-            personOfContact: sanitizeForEmail(personOfContact),
-            emailAddress: sanitizeForEmail(emailAddress),
-            eventDate: sanitizeForEmail(eventDate),
-            ccNumber: sanitizeForEmail(ccNumber),
-            cfcNumber: sanitizeForEmail(cfcNumber),
-            otherNotes: sanitizeForEmail(otherNotes),
-            // format* echo unknown values back unchanged, so escape them too
-            eventSpace: sanitizeForEmail(formatEventSpace(eventSpace)),
-            recordingOption: sanitizeForEmail(formatRecordingOption(recordingOption)),
-        };
-
-        const fileName = req.file ? req.file.filename : null;
-        const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
-
-        // Build email HTML
-        const emailHtml = `
-            <html>
-            <body style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
-                    <h1 style="margin: 0;">Rotman AV Event Booking</h1>
-                    <p style="margin: 10px 0 0; opacity: 0.9;">New booking request received</p>
-                </div>
-
-                <div style="background: #f8f9fa; padding: 30px; border: 1px solid #e9ecef;">
-                    <h2 style="color: #495057; border-bottom: 2px solid #667eea; padding-bottom: 10px;">${sanitized.eventName || 'Untitled Event'}</h2>
-
-                    <table style="width: 100%; border-collapse: collapse;">
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 12px 0; color: #6c757d; width: 40%;">Event Space</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.eventSpace}</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 12px 0; color: #6c757d;">Contact Person</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.personOfContact}</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 12px 0; color: #6c757d;">Email</td>
-                            <td style="padding: 12px 0;"><a href="mailto:${sanitized.emailAddress}">${sanitized.emailAddress}</a></td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 12px 0; color: #6c757d;">Event Date</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.eventDate}</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #dee2e6;">
-                            <td style="padding: 12px 0; color: #6c757d;">Recording Option</td>
-                            <td style="padding: 12px 0; font-weight: 500;">${sanitized.recordingOption}</td>
-                        </tr>
-                    </table>
-
-                    <h3 style="color: #495057; margin-top: 25px;">Schedule</h3>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; background: white; padding: 15px; border-radius: 8px;">
-                        <div><span style="color: #6c757d; display: block; font-size: 12px;">Registration</span><strong>${registrationTime}</strong></div>
-                        <div><span style="color: #6c757d; display: block; font-size: 12px;">Event Start</span><strong>${eventStartTime}</strong></div>
-                        <div><span style="color: #6c757d; display: block; font-size: 12px;">Presentation End</span><strong>${presentationEndTime}</strong></div>
-                        <div><span style="color: #6c757d; display: block; font-size: 12px;">Shutdown</span><strong>${shutdown}</strong></div>
-                    </div>
-
-                    ${(sanitized.ccNumber || sanitized.cfcNumber) ? `
-                    <h3 style="color: #495057; margin-top: 25px;">Budget Numbers</h3>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        ${sanitized.ccNumber ? `<p style="margin: 5px 0;"><strong>CC#:</strong> ${sanitized.ccNumber}</p>` : ''}
-                        ${sanitized.cfcNumber ? `<p style="margin: 5px 0;"><strong>CFC#:</strong> ${sanitized.cfcNumber}</p>` : ''}
-                    </div>
-                    ` : ''}
-
-                    ${sanitized.otherNotes ? `
-                    <h3 style="color: #495057; margin-top: 25px;">Additional Notes</h3>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        <p style="margin: 0; white-space: pre-wrap;">${sanitized.otherNotes}</p>
-                    </div>
-                    ` : ''}
-
-                    ${fileName ? `
-                    <h3 style="color: #495057; margin-top: 25px;">Attached Media</h3>
-                    <div style="background: white; padding: 15px; border-radius: 8px;">
-                        <a href="${baseUrl}/uploads/${fileName}" style="color: #667eea;">View Uploaded File</a>
-                    </div>
-                    ` : ''}
-                </div>
-
-                <div style="background: #495057; color: white; padding: 15px; text-align: center; border-radius: 0 0 10px 10px; font-size: 12px;">
-                    Rotman AV Services
-                </div>
-            </body>
-            </html>
-        `;
-
-        // Send email with calendar invite
-        const mailOptions = {
-            from: `"Rotman AV" <${process.env.SMTP_USERNAME || 'noreply@rotmanav.ca'}>`,
-            to: process.env.EMAIL_TO || 'requests@rotmanav.ca',
-            replyTo: emailAddress,
-            subject: `📅 ${eventName || 'Untitled Event'} - ${eventDate}`,
-            html: emailHtml,
-            alternatives: [{
-                contentType: 'text/calendar; method=REQUEST; charset=utf-8',
-                // generateICS escapes per RFC 5545 itself - pass raw values, not HTML-escaped ones
-                content: generateICS(isoDate, eventStartTime, shutdown, eventName, eventSpace, recordingOption, personOfContact, emailAddress, otherNotes)
-            }]
-        };
-
-        const info = await transporter.sendMail(mailOptions);
-
-        console.log(`[${new Date().toISOString()}] Booking submitted: ${eventName || 'Untitled Event'} on ${eventDate}`);
-
-        const previewUrl = nodemailer.getTestMessageUrl(info);
-        if (previewUrl) {
-            console.log('Preview email at:', previewUrl);
+        let created;
+        try {
+            created = store.create(input);
+        } catch (err) {
+            if (err instanceof BookingError && err.code === 'conflict') {
+                const c = err.conflicts[0];
+                return fail(409, `${mail.formatEventSpace(c.eventSpace)} is already booked from ${mail.formatTime(c.registrationTime)} to ${mail.formatTime(c.shutdownTime)} that day. Please pick another time or space.`);
+            }
+            throw err;
         }
+        const { booking, conflicts } = created;
+
+        console.log(`[${new Date().toISOString()}] Booking #${booking.id} submitted: ${booking.eventName} on ${booking.eventDate}`);
+
+        const links = {
+            adminUrl: `${baseUrl()}/admin#booking-${booking.id}`,
+            uploadUrl: booking.uploadFile ? `${baseUrl()}/uploads/${booking.uploadFile}` : null
+        };
+        const [staffNotified, confirmationSent] = await Promise.all([
+            trySend(mail.newBookingStaffEmail(booking, { conflicts, ...links }), `staff, booking #${booking.id}`),
+            trySend(mail.receivedRequesterEmail(booking), `requester, booking #${booking.id}`)
+        ]);
 
         res.json({
             success: true,
-            message: 'Booking submitted successfully! Calendar invite sent.',
-            previewUrl: previewUrl || null
+            id: booking.id,
+            message: confirmationSent
+                ? `Request #${booking.id} received. A confirmation email is on its way to ${booking.contactEmail}.`
+                : `Request #${booking.id} received. (We couldn't send your confirmation email, but the AV team has your request.)`,
+            staffNotified,
+            confirmationSent
         });
-
     } catch (error) {
         console.error('Error processing booking:', error.message);
+        removeUpload(req.file);
         res.status(500).json({ success: false, message: 'Failed to submit booking. Please try again.' });
     }
 });
 
-// Helper functions
-function formatEventSpace(space) {
-    const spaces = {
-        'full': 'Event Hall Full',
-        'one-third': 'Event Hall 1/3',
-        'two-thirds': 'Event Hall 2/3',
-        'fleck-atrium': 'Fleck Atrium'
-    };
-    return spaces[space] || space;
-}
+// ---------------------------------------------------------------------------
+// Admin API
 
-function formatRecordingOption(option) {
-    const options = {
-        'none': 'None - Technician on site only',
-        'basic-recording': 'Basic Recording - Fixed wide shot or Zoom',
-        'live-web-recording': 'Live Web Recording - Full setup with additional technician'
-    };
-    return options[option] || option;
+const adminApi = express.Router();
+adminApi.use(adminAuth);
+
+adminApi.get('/bookings', (req, res) => {
+    const scope = ['upcoming', 'past', 'all'].includes(req.query.scope) ? req.query.scope : 'upcoming';
+    const status = ['pending', 'approved', 'declined', 'cancelled'].includes(req.query.status) ? req.query.status : undefined;
+    const bookings = store.list({ scope, status, today: todayInToronto() }).map(b => ({
+        ...b,
+        spaceName: mail.formatEventSpace(b.eventSpace),
+        recordingName: mail.formatRecordingOption(b.recordingOption),
+        uploadUrl: b.uploadFile ? `uploads/${encodeURIComponent(b.uploadFile)}` : null,
+        conflicts: ['pending', 'approved'].includes(b.status)
+            ? store.findConflicts(b).map(c => ({ id: c.id, eventName: c.eventName, status: c.status }))
+            : []
+    }));
+    res.json({ success: true, bookings });
+});
+
+adminApi.post('/bookings/:id/status', async (req, res) => {
+    // JSON only: a cross-site HTML form can't send this, which blocks CSRF.
+    if (!req.is('application/json')) {
+        return res.status(415).json({ success: false, message: 'Send JSON' });
+    }
+    const id = Number(req.params.id);
+    const status = req.body.status;
+    const note = text(req.body.note, 2000);
+    try {
+        const { booking, previousStatus } = store.setStatus(id, status, note);
+        console.log(`[${new Date().toISOString()}] Booking #${id}: ${previousStatus} -> ${status}`);
+        const adminUrl = `${baseUrl()}/admin#booking-${id}`;
+        const [requesterNotified] = await Promise.all([
+            trySend(mail.statusRequesterEmail(booking, previousStatus), `requester status, booking #${id}`),
+            trySend(mail.statusStaffEmail(booking, { adminUrl }), `staff status, booking #${id}`)
+        ]);
+        res.json({ success: true, booking, requesterNotified });
+    } catch (err) {
+        if (err instanceof BookingError) {
+            const code = { not_found: 404, conflict: 409, invalid_transition: 409 }[err.code] || 400;
+            return res.status(code).json({ success: false, message: err.message });
+        }
+        console.error('Error updating booking:', err.message);
+        res.status(500).json({ success: false, message: 'Could not update the booking' });
+    }
+});
+
+app.use('/api/admin', adminApi);
+
+// ---------------------------------------------------------------------------
+// Upload cleanup
+
+const UPLOAD_RETENTION_DAYS = parseInt(process.env.UPLOAD_RETENTION_DAYS, 10) || 90;
+
+// Delete files for events more than UPLOAD_RETENTION_DAYS in the past, and
+// stray files no booking points to (older than a day, so in-flight uploads
+// are left alone).
+function purgeOldUploads(now = new Date()) {
+    let removed = 0;
+    const cutoff = addDays(todayInToronto(now), -UPLOAD_RETENTION_DAYS);
+    for (const booking of store.withUploadBefore(cutoff)) {
+        fs.rmSync(path.join(uploadsDir, booking.uploadFile), { force: true });
+        store.clearUpload(booking.id);
+        removed++;
+    }
+    const referenced = store.uploadFiles();
+    for (const name of fs.readdirSync(uploadsDir)) {
+        if (name.startsWith('.') || referenced.has(name)) continue;
+        const file = path.join(uploadsDir, name);
+        if (now - fs.statSync(file).mtimeMs > 24 * 60 * 60 * 1000) {
+            fs.rmSync(file, { force: true });
+            removed++;
+        }
+    }
+    if (removed) console.log(`Upload cleanup: removed ${removed} file(s)`);
+    return removed;
 }
 
 // Export for testing
 module.exports = {
     app,
-    initializeEmailTransporter,
-    formatEventSpace,
-    formatRecordingOption,
+    store,
+    initializeEmailTransporter: mail.initializeEmailTransporter,
+    formatEventSpace: mail.formatEventSpace,
+    formatRecordingOption: mail.formatRecordingOption,
+    sanitizeForEmail: mail.sanitizeForEmail,
+    escapeICalText: mail.escapeICalText,
+    generateICS: mail.generateICS,
+    sentMail: mail.sentMail,
     validateEmail,
     validateTimeOrder,
-    sanitizeForEmail,
     parseEventDate,
-    escapeICalText,
-    generateICS
+    todayInToronto,
+    addDays,
+    purgeOldUploads,
+    uploadsDir
 };
 
 // Start server (only if run directly)
 async function startServer() {
-    await initializeEmailTransporter();
+    await mail.initializeEmailTransporter();
+    purgeOldUploads();
+    setInterval(purgeOldUploads, 24 * 60 * 60 * 1000).unref();
     app.listen(PORT, () => {
         console.log(`Server running at http://localhost:${PORT}`);
+        console.log(`Bookings database: ${DB_FILE}`);
     });
 }
 

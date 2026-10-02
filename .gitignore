@@ -18,6 +18,9 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# Bookings database
+data/
+
 # Uploads (user content)
 uploads/*
 !uploads/.gitkeep

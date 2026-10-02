@@ -1,7 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const request = require('supertest');
 
 const {
     app,
+    store,
     initializeEmailTransporter,
     formatEventSpace,
     formatRecordingOption,
@@ -9,12 +12,48 @@ const {
     validateTimeOrder,
     sanitizeForEmail,
     parseEventDate,
-    generateICS
+    generateICS,
+    sentMail,
+    todayInToronto,
+    addDays,
+    purgeOldUploads,
+    uploadsDir
 } = require('../app');
+const { spacesClash, timesOverlap } = require('../lib/bookings');
 
 beforeAll(async () => {
     await initializeEmailTransporter();
 });
+
+const basic = (user, pass) => ({ Authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') });
+const auth = basic(process.env.AUTH_USER, process.env.AUTH_PASS);
+const adminAuth = basic(process.env.ADMIN_USER, process.env.ADMIN_PASS);
+
+// Each test that books gets its own future date so bookings never clash by accident.
+let dayOffset = 10;
+const nextDate = () => addDays(todayInToronto(), dayOffset++);
+
+function bookingForm(overrides = {}) {
+    return {
+        'event-space': 'full',
+        'person-of-contact': 'Test User',
+        'email-address': 'test@example.com',
+        'event-date': nextDate(),
+        'event-name': 'Test Event',
+        'registration-time': '08:30',
+        'event-start-time': '09:00',
+        'presentation-end-time': '11:30',
+        'shutdown': '12:00',
+        'recording-option': 'basic-recording',
+        ...overrides
+    };
+}
+
+const submit = (form) => request(app).post('/api/submit').set(auth).type('form').send(form);
+const setStatus = (id, status, note) => request(app)
+    .post(`/api/admin/bookings/${id}/status`).set(adminAuth).send({ status, note });
+
+const unfold = (ics) => ics.split('\r\n ').join('');
 
 describe('Helper Functions', () => {
     describe('formatEventSpace', () => {
@@ -68,6 +107,10 @@ describe('Helper Functions', () => {
             expect(result.valid).toBe(false);
             expect(result.message).toContain('Presentation');
         });
+
+        it('should reject a zero-length booking', () => {
+            expect(validateTimeOrder('09:00', '09:00', '09:00', '09:00').valid).toBe(false);
+        });
     });
 
     describe('sanitizeForEmail', () => {
@@ -100,20 +143,46 @@ describe('Helper Functions', () => {
         });
     });
 
+    describe('double-booking rules', () => {
+        it('treats every Event Hall set-up as the same room', () => {
+            expect(spacesClash('full', 'one-third')).toBe(true);
+            expect(spacesClash('one-third', 'two-thirds')).toBe(true);
+            expect(spacesClash('full', 'fleck-atrium')).toBe(false);
+        });
+
+        it('only clashes when times overlap (back-to-back is fine)', () => {
+            const a = { registrationTime: '09:00', shutdownTime: '12:00' };
+            expect(timesOverlap(a, { registrationTime: '11:00', shutdownTime: '13:00' })).toBe(true);
+            expect(timesOverlap(a, { registrationTime: '12:00', shutdownTime: '13:00' })).toBe(false);
+        });
+    });
+
     describe('generateICS', () => {
-        const ics = generateICS(
-            '2026-05-01', '09:00', '12:00', 'Rotman Test & Launch, Part 1', 'full',
-            'basic-recording', 'Test User', 'test@example.com', 'Line one\r\nATTACH;X=evil:evil'
-        );
-        // Undo RFC 5545 line folding so assertions can match logical lines
-        const unfolded = ics.split('\r\n ').join('');
+        const booking = {
+            id: 42, status: 'pending', sequence: 0,
+            eventDate: '2026-05-01', registrationTime: '08:30', startTime: '09:00', endTime: '11:30', shutdownTime: '12:00',
+            eventName: 'Rotman Test & Launch, Part 1', eventSpace: 'full', recordingOption: 'basic-recording',
+            contactName: 'Test User', contactEmail: 'test@example.com', notes: 'Line one\r\nATTACH;X=evil:evil'
+        };
+        const ics = generateICS(booking);
+        const unfolded = unfold(ics);
 
         it('produces RFC 5545 date-times and single-line ORGANIZER/ATTENDEE properties', () => {
-            expect(unfolded).toContain('DTSTART:20260501T090000');
+            expect(unfolded).toContain('DTSTART:20260501T083000');
             expect(unfolded).toContain('DTEND:20260501T120000');
             expect(unfolded).toContain('ORGANIZER;CN="Rotman AV Services":mailto:requests@rotmanav.ca');
             expect(unfolded).toContain('ATTENDEE;CN="Test User";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:test@example.com');
             expect(ics).not.toContain('BEGIN:ORGANIZER');
+        });
+
+        it('uses a stable UID per booking and marks pending bookings tentative', () => {
+            expect(unfolded).toContain('UID:booking-42@rotmanav.ca');
+            expect(unfolded).toContain('STATUS:TENTATIVE');
+            expect(unfold(generateICS({ ...booking, status: 'approved' }))).toContain('STATUS:CONFIRMED');
+            const cancel = unfold(generateICS({ ...booking, status: 'cancelled', sequence: 2 }, 'CANCEL'));
+            expect(cancel).toContain('METHOD:CANCEL');
+            expect(cancel).toContain('STATUS:CANCELLED');
+            expect(cancel).toContain('SEQUENCE:2');
         });
 
         it('escapes TEXT values and cannot be injected via newlines', () => {
@@ -128,213 +197,301 @@ describe('Helper Functions', () => {
     });
 });
 
-describe('API Endpoints', () => {
-    const auth = { Authorization: 'Basic ' + Buffer.from(`${process.env.AUTH_USER}:${process.env.AUTH_PASS}`).toString('base64') };
-
-    describe('GET /', () => {
-        it('should serve the booking form', async () => {
-            const res = await request(app).get('/').set(auth);
-            expect(res.status).toBe(200);
-            expect(res.type).toMatch(/html/);
-        });
+describe('Pages and login', () => {
+    it('should serve the booking form', async () => {
+        const res = await request(app).get('/').set(auth);
+        expect(res.status).toBe(200);
+        expect(res.type).toMatch(/html/);
     });
 
-    describe('GET /health', () => {
-        it('should return health status', async () => {
-            const res = await request(app).get('/health').set(auth);
-            expect(res.status).toBe(200);
-            expect(res.body.status).toBe('ok');
-            expect(res.body.email).toBeDefined();
-        });
+    it('should reject requests without credentials', async () => {
+        const res = await request(app).get('/');
+        expect(res.status).toBe(401);
     });
 
-    describe('Authentication', () => {
-        it('should reject requests without credentials', async () => {
-            const res = await request(app).get('/');
-            expect(res.status).toBe(401);
-        });
-
-        it('should leave /health open for the container healthcheck', async () => {
-            const res = await request(app).get('/health');
-            expect(res.status).toBe(200);
-        });
+    it('should leave /health open for the container healthcheck', async () => {
+        const res = await request(app).get('/health');
+        expect(res.status).toBe(200);
+        expect(res.body.status).toBe('ok');
+        expect(res.body.email).toBeDefined();
     });
 
-    describe('Static files', () => {
-        it('should not serve app source or config files', async () => {
-            for (const file of ['/app.js', '/package.json', '/Dockerfile', '/node_modules/express/package.json']) {
-                const res = await request(app).get(file).set(auth);
-                expect(res.status).toBe(404);
-            }
-        });
+    it('should not serve app source or config files', async () => {
+        for (const file of ['/app.js', '/package.json', '/Dockerfile', '/node_modules/express/package.json', '/data/bookings.db']) {
+            const res = await request(app).get(file).set(adminAuth);
+            expect(res.status).toBe(404);
+        }
     });
 
-    describe('POST /api/submit', () => {
-        it('should accept valid booking request', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test User',
-                    'email-address': 'test@example.com',
-                    'event-date': '2026-05-01',
-                    'event-name': 'Test Event',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'basic-recording'
-                });
+    it('lets the admin login use the booking form too', async () => {
+        const res = await request(app).get('/').set(adminAuth);
+        expect(res.status).toBe(200);
+    });
 
-            expect(res.status).toBe(200);
-            expect(res.body.success).toBe(true);
-        });
+    it('keeps the admin page and API away from the shared form login', async () => {
+        for (const url of ['/admin', '/api/admin/bookings']) {
+            const asUser = await request(app).get(url).set(auth);
+            expect(asUser.status).toBe(401);
+            expect(asUser.headers['www-authenticate']).toContain('Rotman AV Admin');
+            const asAdmin = await request(app).get(url).set(adminAuth);
+            expect(asAdmin.status).toBe(200);
+        }
+    });
+});
 
-        it('should reject invalid email', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test',
-                    'email-address': 'invalid-email',
-                    'event-date': '2026-05-01',
-                    'event-name': 'Test',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+describe('POST /api/submit', () => {
+    beforeEach(() => { sentMail.length = 0; });
 
-            expect(res.status).toBe(400);
-            expect(res.body.success).toBe(false);
-            expect(res.body.message).toContain('email');
-        });
+    it('saves a valid booking as pending and emails staff and the requester', async () => {
+        const form = bookingForm();
+        const res = await submit(form);
 
-        it('should reject invalid time order', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test',
-                    'email-address': 'test@example.com',
-                    'event-date': '2026-05-01',
-                    'event-name': 'Test',
-                    'registration-time': '11:00',  // After start time
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+        expect(res.body.confirmationSent).toBe(true);
 
-            expect(res.status).toBe(400);
-            expect(res.body.success).toBe(false);
-        });
+        const saved = store.get(res.body.id);
+        expect(saved.status).toBe('pending');
+        expect(saved.eventDate).toBe(form['event-date']);
 
-        it('should sanitize XSS attempts', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': '<script>alert("xss")</script>',
-                    'email-address': 'test@example.com',
-                    'event-date': '2026-05-01',
-                    'event-name': '<img src=x onerror=alert(1)>',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+        expect(sentMail).toHaveLength(2);
+        const staff = sentMail.find(m => m.to === 'requests@rotmanav.ca');
+        const requester = sentMail.find(m => m.to === 'test@example.com');
+        expect(staff.replyTo).toBe('test@example.com');
+        expect(unfold(staff.alternatives[0].content)).toContain('STATUS:TENTATIVE');
+        expect(requester.subject).toContain(`#${res.body.id}`);
+        expect(requester.html).toContain('not confirmed yet');
+        expect(requester.alternatives).toBeUndefined();
+    });
 
-            expect(res.status).toBe(200);
-            expect(res.body.success).toBe(true);
-        });
+    it('accepts the date format the form sends', async () => {
+        const iso = nextDate();
+        const pretty = new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+        const res = await submit(bookingForm({ 'event-date': pretty }));
+        expect(res.status).toBe(200);
+        expect(store.get(res.body.id).eventDate).toBe(iso);
+    });
 
-        it('should accept the date format the UI actually submits (flatpickr F j, Y)', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test User',
-                    'email-address': 'test@example.com',
-                    'event-date': 'May 1, 2026',
-                    'event-name': 'UI Format Event',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+    it('escapes user text in emails', async () => {
+        const res = await submit(bookingForm({ 'event-name': '<img src=x onerror=alert(1)>', 'other-notes': '<b>hi</b>' }));
+        expect(res.status).toBe(200);
+        for (const m of sentMail) {
+            expect(m.html).not.toContain('<img src=x');
+            expect(m.html).not.toContain('<b>hi</b>');
+        }
+    });
 
-            expect(res.status).toBe(200);
-            expect(res.body.success).toBe(true);
-        });
+    it('should reject invalid email', async () => {
+        const res = await submit(bookingForm({ 'email-address': 'invalid-email' }));
+        expect(res.status).toBe(400);
+        expect(res.body.success).toBe(false);
+    });
 
-        it('should reject an invalid event date', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test',
-                    'email-address': 'test@example.com',
-                    'event-date': 'banana',
-                    'event-name': 'Test',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+    it('should reject dates in the past', async () => {
+        const res = await submit(bookingForm({ 'event-date': addDays(todayInToronto(), -1) }));
+        expect(res.status).toBe(400);
+        expect(res.body.message).toContain('past');
+    });
 
-            expect(res.status).toBe(400);
-            expect(res.body.message).toContain('date');
-        });
+    it('should reject an invalid date', async () => {
+        const res = await submit(bookingForm({ 'event-date': 'not-a-date' }));
+        expect(res.status).toBe(400);
+        expect(res.body.message).toContain('date');
+    });
 
-        it('should reject time fields that are not HH:MM', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .type('form')
-                .send({
-                    'event-space': 'full',
-                    'person-of-contact': 'Test',
-                    'email-address': 'test@example.com',
-                    'event-date': '2026-05-01',
-                    'event-name': 'Test',
-                    'registration-time': '08:30',
-                    'event-start-time': '09:00<img src=x onerror=alert(1)>',
-                    'presentation-end-time': '11:30',
-                    'shutdown': '12:00',
-                    'recording-option': 'none'
-                });
+    it('should reject unknown spaces and recording options', async () => {
+        const space = await submit(bookingForm({ 'event-space': '<b>roof</b>' }));
+        expect(space.status).toBe(400);
+        const recording = await submit(bookingForm({ 'recording-option': 'drone' }));
+        expect(recording.status).toBe(400);
+    });
 
-            expect(res.status).toBe(400);
-            expect(res.body.message).toContain('HH:MM');
-        });
+    it('should reject time fields that are not HH:MM', async () => {
+        const res = await submit(bookingForm({ 'event-start-time': '09:00<img src=x onerror=alert(1)>' }));
+        expect(res.status).toBe(400);
+        expect(res.body.message).toContain('HH:MM');
+    });
 
-        it('should reject disallowed upload types with a JSON error', async () => {
-            const res = await request(app)
-                .post('/api/submit')
-                .set(auth)
-                .field('email-address', 'test@example.com')
-                .attach('media-upload', Buffer.from('<html></html>'), { filename: 'evil.mp4html', contentType: 'video/mp4' });
+    it('should reject disallowed upload types with a JSON error', async () => {
+        const res = await request(app)
+            .post('/api/submit')
+            .set(auth)
+            .field('email-address', 'test@example.com')
+            .attach('media-upload', Buffer.from('<html></html>'), { filename: 'evil.mp4html', contentType: 'video/mp4' });
 
-            expect(res.status).toBe(400);
-            expect(res.body.success).toBe(false);
-            expect(res.body.message).toContain('can be uploaded');
-        });
+        expect(res.status).toBe(400);
+        expect(res.body.success).toBe(false);
+        expect(res.body.message).toContain('can be uploaded');
+    });
+
+    it('deletes the uploaded file when the booking is rejected', async () => {
+        const before = new Set(fs.readdirSync(uploadsDir));
+        const res = await request(app)
+            .post('/api/submit')
+            .set(auth)
+            .field('email-address', 'bad')
+            .attach('media-upload', Buffer.from('fake'), { filename: 'photo.png', contentType: 'image/png' });
+        expect(res.status).toBe(400);
+        await new Promise(r => setTimeout(r, 50));
+        const added = fs.readdirSync(uploadsDir).filter(f => !before.has(f));
+        expect(added).toEqual([]);
+    });
+});
+
+describe('Double booking', () => {
+    beforeEach(() => { sentMail.length = 0; });
+
+    it('refuses a request that overlaps an approved booking in the same room', async () => {
+        const date = nextDate();
+        const first = await submit(bookingForm({ 'event-date': date }));
+        expect((await setStatus(first.body.id, 'approved')).status).toBe(200);
+
+        const clash = await submit(bookingForm({ 'event-date': date, 'event-space': 'one-third', 'registration-time': '11:00', 'event-start-time': '11:00', 'presentation-end-time': '13:00', 'shutdown': '13:30' }));
+        expect(clash.status).toBe(409);
+        expect(clash.body.message).toContain('already booked');
+
+        // A different room, or right after shutdown, is fine
+        expect((await submit(bookingForm({ 'event-date': date, 'event-space': 'fleck-atrium' }))).status).toBe(200);
+        expect((await submit(bookingForm({ 'event-date': date, 'registration-time': '12:00', 'event-start-time': '12:30', 'presentation-end-time': '14:00', 'shutdown': '14:30' }))).status).toBe(200);
+    });
+
+    it('accepts a request that overlaps a pending one but warns staff', async () => {
+        const date = nextDate();
+        const first = await submit(bookingForm({ 'event-date': date }));
+        sentMail.length = 0;
+        const second = await submit(bookingForm({ 'event-date': date }));
+        expect(second.status).toBe(200);
+        const staff = sentMail.find(m => m.to === 'requests@rotmanav.ca');
+        expect(staff.html).toContain('Possible double booking');
+        expect(staff.html).toContain(`#${first.body.id}`);
+
+        // Approving one blocks approving the other
+        expect((await setStatus(first.body.id, 'approved')).status).toBe(200);
+        const blocked = await setStatus(second.body.id, 'approved');
+        expect(blocked.status).toBe(409);
+        expect(blocked.body.message).toContain(`#${first.body.id}`);
+    });
+
+    it('shows taken times without personal details', async () => {
+        const date = nextDate();
+        await submit(bookingForm({ 'event-date': date, 'event-name': 'Secret Board Meeting' }));
+        const res = await request(app).get(`/api/availability?date=${date}&space=two-thirds`).set(auth);
+        expect(res.status).toBe(200);
+        expect(res.body.bookings).toEqual([
+            { space: 'full', spaceName: 'Event Hall Full', from: '08:30', to: '12:00', status: 'pending' }
+        ]);
+        expect(JSON.stringify(res.body)).not.toContain('Secret');
+
+        const atrium = await request(app).get(`/api/availability?date=${date}&space=fleck-atrium`).set(auth);
+        expect(atrium.body.bookings).toEqual([]);
+    });
+});
+
+describe('Admin', () => {
+    beforeEach(() => { sentMail.length = 0; });
+
+    it('lists upcoming bookings with conflicts', async () => {
+        const date = nextDate();
+        const a = await submit(bookingForm({ 'event-date': date }));
+        const b = await submit(bookingForm({ 'event-date': date }));
+        const res = await request(app).get('/api/admin/bookings?scope=upcoming').set(adminAuth);
+        expect(res.status).toBe(200);
+        const listed = res.body.bookings.find(x => x.id === a.body.id);
+        expect(listed.spaceName).toBe('Event Hall Full');
+        expect(listed.conflicts.map(c => c.id)).toEqual([b.body.id]);
+    });
+
+    it('approving emails the requester a confirmed invite and updates staff', async () => {
+        const created = await submit(bookingForm());
+        sentMail.length = 0;
+        const res = await setStatus(created.body.id, 'approved', 'See you there');
+        expect(res.status).toBe(200);
+        expect(res.body.booking.status).toBe('approved');
+
+        const requester = sentMail.find(m => m.to === 'test@example.com');
+        expect(requester.subject).toContain('approved');
+        expect(requester.html).toContain('See you there');
+        const ics = unfold(requester.alternatives[0].content);
+        expect(ics).toContain('STATUS:CONFIRMED');
+        expect(ics).toContain('SEQUENCE:1');
+        expect(sentMail.find(m => m.to === 'requests@rotmanav.ca')).toBeDefined();
+    });
+
+    it('declining emails the requester without an invite and cancels the staff entry', async () => {
+        const created = await submit(bookingForm());
+        sentMail.length = 0;
+        const res = await setStatus(created.body.id, 'declined', 'Room closed');
+        expect(res.status).toBe(200);
+        const requester = sentMail.find(m => m.to === 'test@example.com');
+        expect(requester.alternatives).toBeUndefined();
+        const staff = sentMail.find(m => m.to === 'requests@rotmanav.ca');
+        expect(unfold(staff.alternatives[0].content)).toContain('METHOD:CANCEL');
+    });
+
+    it('cancelling an approved booking sends the requester a calendar cancel', async () => {
+        const created = await submit(bookingForm());
+        await setStatus(created.body.id, 'approved');
+        sentMail.length = 0;
+        const res = await setStatus(created.body.id, 'cancelled');
+        expect(res.status).toBe(200);
+        const requester = sentMail.find(m => m.to === 'test@example.com');
+        expect(unfold(requester.alternatives[0].content)).toContain('METHOD:CANCEL');
+    });
+
+    it('refuses invalid changes', async () => {
+        const created = await submit(bookingForm());
+        await setStatus(created.body.id, 'declined');
+        expect((await setStatus(created.body.id, 'approved')).status).toBe(409);
+        expect((await setStatus(999999, 'approved')).status).toBe(404);
+        expect((await setStatus(created.body.id, 'banana')).status).toBe(400);
+    });
+
+    it('only accepts JSON status changes (blocks cross-site forms)', async () => {
+        const created = await submit(bookingForm());
+        const res = await request(app)
+            .post(`/api/admin/bookings/${created.body.id}/status`)
+            .set(adminAuth).type('form').send({ status: 'approved' });
+        expect(res.status).toBe(415);
+        expect(store.get(created.body.id).status).toBe('pending');
+    });
+
+    it('only lets staff open uploaded files', async () => {
+        const name = 'test-upload-access.png';
+        fs.writeFileSync(path.join(uploadsDir, name), 'x');
+        try {
+            expect((await request(app).get(`/uploads/${name}`).set(auth)).status).toBe(401);
+            expect((await request(app).get(`/uploads/${name}`).set(adminAuth)).status).toBe(200);
+        } finally {
+            fs.rmSync(path.join(uploadsDir, name), { force: true });
+        }
+    });
+});
+
+describe('Upload cleanup', () => {
+    it('deletes files for old events and stray files, keeps current ones', () => {
+        const write = (name) => { fs.writeFileSync(path.join(uploadsDir, name), 'x'); return name; };
+        const base = {
+            eventName: 'Old', eventSpace: 'fleck-atrium', registrationTime: '09:00', startTime: '09:00',
+            endTime: '10:00', shutdownTime: '10:00', contactName: 'A', contactEmail: 'a@example.com', recordingOption: 'none'
+        };
+        const oldFile = write('cleanup-old.png');
+        const keepFile = write('cleanup-keep.png');
+        const strayFile = write('cleanup-stray.png');
+        const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+        fs.utimesSync(path.join(uploadsDir, strayFile), twoDaysAgo, twoDaysAgo);
+
+        const old = store.create({ ...base, eventDate: addDays(todayInToronto(), -200), uploadFile: oldFile }).booking;
+        const keep = store.create({ ...base, eventDate: nextDate(), uploadFile: keepFile }).booking;
+
+        try {
+            purgeOldUploads();
+            expect(fs.existsSync(path.join(uploadsDir, oldFile))).toBe(false);
+            expect(fs.existsSync(path.join(uploadsDir, strayFile))).toBe(false);
+            expect(fs.existsSync(path.join(uploadsDir, keepFile))).toBe(true);
+            expect(store.get(old.id).uploadFile).toBeNull();
+            expect(store.get(keep.id).uploadFile).toBe(keepFile);
+        } finally {
+            for (const f of [oldFile, keepFile, strayFile]) fs.rmSync(path.join(uploadsDir, f), { force: true });
+        }
     });
 });
